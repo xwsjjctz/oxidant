@@ -1,0 +1,14 @@
+/target
+/.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dylib
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.tiff
+test*
