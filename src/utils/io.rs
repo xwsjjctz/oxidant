@@ -3,6 +3,7 @@
 use std::io::{Read, Seek, SeekFrom};
 
 /// Read big-endian 16-bit integer
+#[allow(dead_code)]
 pub fn read_be_u16<R: Read>(reader: &mut R) -> std::io::Result<u16> {
     let mut buffer = [0u8; 2];
     reader.read_exact(&mut buffer)?;
@@ -10,6 +11,7 @@ pub fn read_be_u16<R: Read>(reader: &mut R) -> std::io::Result<u16> {
 }
 
 /// Read big-endian 32-bit integer
+#[allow(dead_code)]
 pub fn read_be_u32<R: Read>(reader: &mut R) -> std::io::Result<u32> {
     let mut buffer = [0u8; 4];
     reader.read_exact(&mut buffer)?;
@@ -17,6 +19,7 @@ pub fn read_be_u32<R: Read>(reader: &mut R) -> std::io::Result<u32> {
 }
 
 /// Read little-endian 16-bit integer
+#[allow(dead_code)]
 pub fn read_le_u16<R: Read>(reader: &mut R) -> std::io::Result<u16> {
     let mut buffer = [0u8; 2];
     reader.read_exact(&mut buffer)?;
@@ -24,6 +27,7 @@ pub fn read_le_u16<R: Read>(reader: &mut R) -> std::io::Result<u16> {
 }
 
 /// Read little-endian 32-bit integer
+#[allow(dead_code)]
 pub fn read_le_u32<R: Read>(reader: &mut R) -> std::io::Result<u32> {
     let mut buffer = [0u8; 4];
     reader.read_exact(&mut buffer)?;
@@ -31,6 +35,7 @@ pub fn read_le_u32<R: Read>(reader: &mut R) -> std::io::Result<u32> {
 }
 
 /// Read synchsafe 32-bit integer (7 bits per byte)
+#[allow(dead_code)]
 pub fn read_synchsafe_u32<R: Read>(reader: &mut R) -> std::io::Result<u32> {
     let mut buffer = [0u8; 4];
     reader.read_exact(&mut buffer)?;
@@ -41,6 +46,7 @@ pub fn read_synchsafe_u32<R: Read>(reader: &mut R) -> std::io::Result<u32> {
 }
 
 /// Check if file has signature at current position
+#[allow(dead_code)]
 pub fn check_signature<R: Read + Seek>(reader: &mut R, signature: &[u8]) -> std::io::Result<bool> {
     let pos = reader.stream_position()?;
     let mut buffer = vec![0u8; signature.len()];

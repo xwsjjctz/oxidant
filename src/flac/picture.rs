@@ -56,7 +56,8 @@ impl PictureType {
         }
     }
 
-    pub fn to_string(&self) -> &'static str {
+    #[allow(dead_code)]
+pub fn to_string(&self) -> &'static str {
         match self {
             PictureType::Other => "Other",
             PictureType::FileIcon => "File Icon",
@@ -168,6 +169,7 @@ impl FlacPicture {
     }
 
     /// Get file extension based on MIME type
+    #[allow(dead_code)]
     pub fn get_extension(&self) -> &'static str {
         match self.mime_type.as_str() {
             "image/jpeg" | "image/jpg" => "jpg",
@@ -177,6 +179,57 @@ impl FlacPicture {
             "image/bmp" => "bmp",
             "image/tiff" => "tiff",
             _ => "jpg",
+        }
+    }
+
+    /// Encode FlacPicture to bytes
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+
+        // Picture type (32-bit big-endian)
+        result.extend_from_slice(&(self.picture_type as u32).to_be_bytes());
+
+        // MIME type length (32-bit big-endian)
+        result.extend_from_slice(&(self.mime_type.len() as u32).to_be_bytes());
+        // MIME type
+        result.extend_from_slice(self.mime_type.as_bytes());
+
+        // Description length (32-bit big-endian)
+        result.extend_from_slice(&(self.description.len() as u32).to_be_bytes());
+        // Description (UTF-8)
+        result.extend_from_slice(self.description.as_bytes());
+
+        // Width (32-bit big-endian)
+        result.extend_from_slice(&self.width.to_be_bytes());
+
+        // Height (32-bit big-endian)
+        result.extend_from_slice(&self.height.to_be_bytes());
+
+        // Depth (32-bit big-endian)
+        result.extend_from_slice(&self.depth.to_be_bytes());
+
+        // Colors (32-bit big-endian)
+        result.extend_from_slice(&self.colors.to_be_bytes());
+
+        // Picture data length (32-bit big-endian)
+        result.extend_from_slice(&(self.data.len() as u32).to_be_bytes());
+        // Picture data
+        result.extend_from_slice(&self.data);
+
+        result
+    }
+
+    /// Create a new FlacPicture from image data
+    pub fn new(data: Vec<u8>, mime_type: String, description: String) -> Self {
+        FlacPicture {
+            picture_type: PictureType::CoverFront,
+            mime_type,
+            description,
+            width: 0,
+            height: 0,
+            depth: 0,
+            colors: 0,
+            data,
         }
     }
 }

@@ -12,3 +12,9 @@ __pycache__/
 *.gif
 *.tiff
 test*
+*.flac
+*.mp3
+*.wav
+*.ogg
+*.m4a
+*.aac

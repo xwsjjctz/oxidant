@@ -59,6 +59,42 @@ impl VorbisComment {
             .find(|(f, _)| f.eq_ignore_ascii_case(field))
             .map(|(_, v)| v)
     }
+
+    /// Set a comment value by field name
+    pub fn set(&mut self, field: &str, value: &str) {
+        // Remove existing comment with the same field (case-insensitive)
+        self.comments.retain(|(f, _)| !f.eq_ignore_ascii_case(field));
+        // Add new comment
+        self.comments.push((field.to_uppercase(), value.to_string()));
+    }
+
+    /// Remove a comment by field name
+    pub fn remove(&mut self, field: &str) {
+        self.comments.retain(|(f, _)| !f.eq_ignore_ascii_case(field));
+    }
+
+    /// Convert Vorbis comment to bytes
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+
+        // Vendor string
+        let vendor_bytes = self.vendor_string.as_bytes();
+        result.extend_from_slice(&(vendor_bytes.len() as u32).to_le_bytes());
+        result.extend_from_slice(vendor_bytes);
+
+        // Comment count
+        result.extend_from_slice(&(self.comments.len() as u32).to_le_bytes());
+
+        // Comments
+        for (field, value) in &self.comments {
+            let comment_string = format!("{}={}", field, value);
+            let comment_bytes = comment_string.as_bytes();
+            result.extend_from_slice(&(comment_bytes.len() as u32).to_le_bytes());
+            result.extend_from_slice(comment_bytes);
+        }
+
+        result
+    }
 }
 
 /// Common Vorbis comment field names
@@ -71,6 +107,8 @@ impl VorbisFields {
     pub const TRACKNUMBER: &str = "TRACKNUMBER";
     pub const GENRE: &str = "GENRE";
     pub const COMMENT: &str = "COMMENT";
+    pub const LYRICS: &str = "LYRICS";
 }
 
+#[allow(dead_code)]
 pub const VORBIS_FIELDS: VorbisFields = VorbisFields;

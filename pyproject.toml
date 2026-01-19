@@ -9,7 +9,7 @@ description = "A high-performance audio metadata library for ID3 and FLAC format
 requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [
-    { name = "Your Name", email = "your.email@example.com" }
+    { name = "xwsjjctz", email = "xwsjjctz@icloud.com" }
 ]
 classifiers = [
     "Programming Language :: Rust",
@@ -17,6 +17,9 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 keywords = ["audio", "metadata", "id3", "flac", "mp3"]
+dependencies = [
+    "pip>=25.0.1",
+]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

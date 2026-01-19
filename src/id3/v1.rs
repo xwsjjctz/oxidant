@@ -12,6 +12,7 @@ pub struct Id3v1Tag {
     pub year: String,
     pub comment: String,
     pub track: Option<u8>,
+    #[allow(dead_code)]
     pub genre: u8,
 }
 

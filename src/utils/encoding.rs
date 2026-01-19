@@ -53,6 +53,7 @@ pub fn decode_text(data: &[u8], encoding: TextEncoding) -> String {
 }
 
 /// Encode text with specified encoding
+#[allow(dead_code)]
 pub fn encode_text(text: &str, encoding: TextEncoding) -> Vec<u8> {
     match encoding {
         TextEncoding::Iso8859_1 => {

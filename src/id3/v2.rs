@@ -6,6 +6,7 @@ use std::io::Read;
 #[derive(Debug)]
 pub struct Id3v2Header {
     pub version: (u8, u8),
+    #[allow(dead_code)]
     pub flags: u8,
     pub size: u32,
 }
@@ -22,6 +23,7 @@ pub struct Id3v2Tag {
 pub struct Id3Frame {
     pub frame_id: String,
     pub size: u32,
+    #[allow(dead_code)]
     pub flags: u16,
     pub data: Vec<u8>,
 }
@@ -77,7 +79,11 @@ impl Id3v2Tag {
                 None => break,
             };
 
-            remaining -= frame.size as usize + 10; // frame header is 10 bytes
+            let frame_total_size = frame.size as usize + 10; // frame header is 10 bytes
+            if frame_total_size > remaining {
+                break;
+            }
+            remaining -= frame_total_size;
             frames.push(frame);
         }
 

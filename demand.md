@@ -1,3 +1,5 @@
 目前已经使用git和cargo初始化成功项目了，我想开发一个基于rust编写的python库，用于处理id3和flac编码音频的元数据信息，基于maturin和pyo3实现。
 
 处理音频元数据的部分我想要参照id3和flac的元数据标准，分析音频文件的字节流手动实现。
+
+目前这个项目完全由uv和maturin管理，通过uv run maturin develop来编译安装oxidant库，不要使用别的地方的python。
