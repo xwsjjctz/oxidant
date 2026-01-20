@@ -1,4 +1,5 @@
 use pyo3::prelude::*;
+use pyo3::Bound;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 
@@ -947,6 +948,120 @@ impl AudioFile {
 
         Ok(())
     }
+
+    /// Set title for FLAC file
+    fn set_flac_title(&self, title: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(VorbisFields::TITLE, &title)
+    }
+
+    /// Set artist for FLAC file
+    fn set_flac_artist(&self, artist: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(VorbisFields::ARTIST, &artist)
+    }
+
+    /// Set album for FLAC file
+    fn set_flac_album(&self, album: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(VorbisFields::ALBUM, &album)
+    }
+
+    /// Set year for FLAC file
+    fn set_flac_year(&self, year: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(VorbisFields::DATE, &year)
+    }
+
+    /// Set track number for FLAC file
+    fn set_flac_track(&self, track: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(VorbisFields::TRACKNUMBER, &track)
+    }
+
+    /// Set genre for FLAC file
+    fn set_flac_genre(&self, genre: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(VorbisFields::GENRE, &genre)
+    }
+
+    /// Set comment for FLAC file
+    fn set_flac_comment(&self, comment: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(VorbisFields::COMMENT, &comment)
+    }
+
+    /// Helper method to set a Vorbis comment field in FLAC file
+    fn set_flac_vorbis_field(&self, field: &str, value: &str) -> PyResult<()> {
+        // Read the whole file
+        let mut file_data = std::fs::read(&self.path)?;
+
+        // Find Vorbis Comment block
+        let mut pos = 4; // Skip FLAC signature
+        let mut found_vorbis = false;
+
+        while pos < file_data.len() {
+            if pos + 4 > file_data.len() {
+                break;
+            }
+
+            // Read block header
+            let is_last = (file_data[pos] & 0x80) != 0;
+            let block_type = file_data[pos] & 0x7F;
+
+            if block_type == 4 { // Vorbis Comment block type
+                // Read block length
+                let block_length = (((file_data[pos + 1] as u32) << 16) |
+                                  ((file_data[pos + 2] as u32) << 8) |
+                                  (file_data[pos + 3] as u32)) as usize;
+
+                let header_size = 4;
+                let total_size = header_size + block_length;
+
+                // Read existing Vorbis comment
+                let vorbis_data = &file_data[pos + header_size..pos + total_size];
+                if let Ok(mut vorbis) = flac::VorbisComment::read(&mut std::io::Cursor::new(vorbis_data)) {
+                    // Set the field
+                    vorbis.set(field, value);
+                    let new_vorbis_data = vorbis.to_bytes();
+
+                    // Update block
+                    let new_block_length = new_vorbis_data.len();
+                    let mut new_header = [0u8; 4];
+                    new_header[0] = if is_last { 0x80 | 4 } else { 4 };
+                    new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
+                    new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
+                    new_header[3] = (new_block_length & 0xFF) as u8;
+
+                    // Replace the block
+                    let mut new_file_data = Vec::new();
+                    new_file_data.extend_from_slice(&file_data[..pos]);
+                    new_file_data.extend_from_slice(&new_header);
+                    new_file_data.extend_from_slice(&new_vorbis_data);
+                    new_file_data.extend_from_slice(&file_data[pos + total_size..]);
+
+                    file_data = new_file_data;
+                    found_vorbis = true;
+                    break;
+                }
+            } else {
+                // Move to next block
+                let block_length: usize = (((file_data[pos + 1] as u32) << 16) |
+                                          ((file_data[pos + 2] as u32) << 8) |
+                                          (file_data[pos + 3] as u32)) as usize;
+                pos += 4 + block_length;
+
+                if is_last {
+                    break;
+                }
+            }
+        }
+
+        // If no Vorbis Comment block found, create a new one
+        if !found_vorbis {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "No Vorbis Comment block found in FLAC file"
+            ));
+        }
+
+        // Write modified file
+        std::fs::write(&self.path, file_data)?;
+
+        Ok(())
+    }
 }
 
 /// Convert regular integer to synchsafe integer (7 bits per byte)
@@ -1090,21 +1205,19 @@ impl Metadata {
     }
 
     /// Convert to dictionary
-    fn to_dict(&self) -> PyResult<pyo3::Py<pyo3::types::PyDict>> {
-        Python::with_gil(|py| {
-            let dict = pyo3::types::PyDict::new_bound(py);
-            dict.set_item("file_type", &self.file_type)?;
-            dict.set_item("version", &self.version)?;
-            dict.set_item("title", self.title.as_ref())?;
-            dict.set_item("artist", self.artist.as_ref())?;
-            dict.set_item("album", self.album.as_ref())?;
-            dict.set_item("year", self.year.as_ref())?;
-            dict.set_item("track", self.track.as_ref())?;
-            dict.set_item("genre", self.genre.as_ref())?;
-            dict.set_item("comment", self.comment.as_ref())?;
-            dict.set_item("lyrics", self.lyrics.as_ref())?;
-            Ok(dict.into())
-        })
+    fn to_dict<'a>(&self, py: Python<'a>) -> PyResult<Bound<'a, pyo3::types::PyDict>> {
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("file_type", &self.file_type)?;
+        dict.set_item("version", &self.version)?;
+        dict.set_item("title", self.title.as_ref())?;
+        dict.set_item("artist", self.artist.as_ref())?;
+        dict.set_item("album", self.album.as_ref())?;
+        dict.set_item("year", self.year.as_ref())?;
+        dict.set_item("track", self.track.as_ref())?;
+        dict.set_item("genre", self.genre.as_ref())?;
+        dict.set_item("comment", self.comment.as_ref())?;
+        dict.set_item("lyrics", self.lyrics.as_ref())?;
+        Ok(dict)
     }
 
     /// String representation
