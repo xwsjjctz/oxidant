@@ -18,3 +18,5 @@ test*
 *.ogg
 *.m4a
 *.aac
+
+.claude/
