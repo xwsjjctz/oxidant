@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use pyo3::Bound;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
-use serde::{Serialize, Deserialize};
+use serde::{Serialize, Deserialize, Serializer};
 
 mod id3;
 mod flac;
@@ -10,6 +10,26 @@ mod utils;
 
 use id3::{Id3v1Tag, Id3v2Tag};
 use flac::{FlacMetadataBlock, FlacMetadataBlockType, FLAC_SIGNATURE, VorbisFields, FlacPicture};
+
+/// Custom serialization for Vec<u8> to base64 string
+fn serialize_as_base64<S>(data: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    use base64::prelude::*;
+    let base64_str = BASE64_STANDARD.encode(data);
+    serializer.serialize_str(&base64_str)
+}
+
+/// Custom deserialization for base64 string to Vec<u8>
+fn deserialize_base64_to_vec<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use base64::prelude::*;
+    let s = String::deserialize(deserializer)?;
+    BASE64_STANDARD.decode(&s).map_err(serde::de::Error::custom)
+}
 
 /// Oxidant - A high-performance audio metadata library
 #[pymodule]
@@ -181,17 +201,17 @@ impl AudioFile {
         utils::encoding::decode_text(&data[1..], encoding)
     }
 
-    /// Extract cover art from audio file
-    fn extract_cover(&self) -> PyResult<Option<CoverArt>> {
+    /// Read cover art from audio file
+    fn read_cover(&self) -> PyResult<Option<CoverArt>> {
         match self.file_type.as_str() {
-            "flac" => self.extract_flac_cover(),
-            "id3v2" => self.extract_id3v2_cover(),
+            "flac" => self.read_flac_cover(),
+            "id3v2" => self.read_id3v2_cover(),
             _ => Ok(None),
         }
     }
 
-    /// Extract cover art from FLAC file
-    fn extract_flac_cover(&self) -> PyResult<Option<CoverArt>> {
+    /// Read cover art from FLAC file
+    fn read_flac_cover(&self) -> PyResult<Option<CoverArt>> {
         let file = File::open(&self.path)?;
         let mut reader = BufReader::new(file);
 
@@ -231,8 +251,8 @@ impl AudioFile {
         Ok(None)
     }
 
-    /// Extract cover art from ID3v2 file
-    fn extract_id3v2_cover(&self) -> PyResult<Option<CoverArt>> {
+    /// Read cover art from ID3v2 file
+    fn read_id3v2_cover(&self) -> PyResult<Option<CoverArt>> {
         let file = File::open(&self.path)?;
         let mut reader = BufReader::new(file);
 
@@ -243,7 +263,7 @@ impl AudioFile {
                         if let Some((mime_type, _picture_type, description, data)) = id3::frames::decode_apic_frame(&frame.data) {
                             return Ok(Some(CoverArt {
                                 mime_type,
-                                width: 0,  // ID3v2 doesn't store dimensions
+                                width: 0,
                                 height: 0,
                                 depth: 0,
                                 description,
@@ -257,803 +277,6 @@ impl AudioFile {
             Ok(None) => Ok(None),
             Err(e) => Err(pyo3::exceptions::PyIOError::new_err(e.to_string())),
         }
-    }
-
-    /// Set cover art for audio file
-    fn set_cover(&self, image_path: String, mime_type: String, description: String) -> PyResult<()> {
-        match self.file_type.as_str() {
-            "flac" => self.set_flac_cover(image_path, mime_type, description),
-            "id3v2" => self.set_id3v2_cover(image_path, mime_type, description),
-            _ => Err(pyo3::exceptions::PyValueError::new_err(
-                format!("File type {} does not support cover art modification", self.file_type)
-            )),
-        }
-    }
-
-    /// Set cover art for FLAC file
-    fn set_flac_cover(&self, image_path: String, mime_type: String, description: String) -> PyResult<()> {
-        // Read image data
-        let image_data = std::fs::read(&image_path)?;
-
-        // Create new picture
-        let new_picture = flac::FlacPicture::new(image_data, mime_type, description);
-        let picture_data = new_picture.to_bytes();
-
-        // Read the whole file
-        let mut file_data = std::fs::read(&self.path)?;
-
-        // Find and replace the first PICTURE block
-        let mut pos = 4; // Skip FLAC signature
-        let mut found_picture = false;
-
-        while pos < file_data.len() {
-            if pos + 4 > file_data.len() {
-                break;
-            }
-
-            // Read block header
-            let is_last = (file_data[pos] & 0x80) != 0;
-            let block_type = file_data[pos] & 0x7F;
-
-            if block_type == 6 { // Picture block type
-                // Read block length
-                let block_length = (((file_data[pos + 1] as u32) << 16) |
-                                  ((file_data[pos + 2] as u32) << 8) |
-                                  (file_data[pos + 3] as u32)) as usize;
-
-                            let header_size = 4;
-                            let total_size = header_size + block_length;
-                            let new_block_length = picture_data.len();
-                            let total_size_usize = total_size;
-                // Create new block header
-                let mut new_header = [0u8; 4];
-                new_header[0] = if is_last { 0x80 | 6 } else { 6 };
-                new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
-                new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
-                new_header[3] = (new_block_length & 0xFF) as u8;
-
-                // Replace the block
-                let mut new_file_data = Vec::new();
-                new_file_data.extend_from_slice(&file_data[..pos]);
-                new_file_data.extend_from_slice(&new_header);
-                new_file_data.extend_from_slice(&picture_data);
-                new_file_data.extend_from_slice(&file_data[pos + total_size_usize..]);
-
-                file_data = new_file_data;
-                found_picture = true;
-                break;
-            } else {
-                // Move to next block
-                let block_length: usize = (((file_data[pos + 1] as u32) << 16) |
-                                          ((file_data[pos + 2] as u32) << 8) |
-                                          (file_data[pos + 3] as u32)) as usize;
-                pos += 4 + block_length;
-
-                if is_last {
-                    break;
-                }
-            }
-        }
-
-        // If no picture block found, insert a new one before the audio data
-        if !found_picture {
-            // Find the position before audio data (after last metadata block)
-            let insert_pos = pos;
-
-            // Create new picture block
-            let mut new_header = [0u8; 4];
-            let new_block_length = picture_data.len();
-            new_header[0] = 0x80 | 6; // Last block + Picture type
-            new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
-            new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
-            new_header[3] = (new_block_length & 0xFF) as u8;
-
-            // Update the previous block's last flag
-            if insert_pos > 4 {
-                file_data[insert_pos - 4] &= 0x7F; // Clear last flag
-            }
-
-            // Insert new block
-            let mut new_file_data = Vec::new();
-            new_file_data.extend_from_slice(&file_data[..insert_pos]);
-            new_file_data.extend_from_slice(&new_header);
-            new_file_data.extend_from_slice(&picture_data);
-            new_file_data.extend_from_slice(&file_data[insert_pos..]);
-
-            file_data = new_file_data;
-        }
-
-        // Write modified file
-        std::fs::write(&self.path, file_data)?;
-
-        Ok(())
-    }
-
-    /// Set cover art for ID3v2 file
-    fn set_id3v2_cover(&self, image_path: String, mime_type: String, description: String) -> PyResult<()> {
-        use id3::frames::{encode_apic_frame, PictureType};
-
-        // Read image data
-        let image_data = std::fs::read(&image_path)?;
-
-        // Create APIC frame
-        let apic_data = encode_apic_frame(&mime_type, PictureType::CoverFront, &description, &image_data);
-
-        // Read the whole file
-        let mut file_data = std::fs::read(&self.path)?;
-
-        // Check for ID3v2 tag
-        if file_data.len() < 10 || &file_data[0..3] != b"ID3" {
-            return Err(pyo3::exceptions::PyValueError::new_err("Not a valid ID3v2 file"));
-        }
-
-        // Get ID3v2 header info
-        let version = (file_data[3], file_data[4]);
-        let _flags = file_data[5];
-        let tag_size: usize = (((file_data[6] as u32) << 21) |
-                      ((file_data[7] as u32) << 14) |
-                      ((file_data[8] as u32) << 7) |
-                      (file_data[9] as u32)) as usize;
-
-        let header_size: usize = 10;
-        let tag_end: usize = header_size + tag_size;
-
-        // Find and replace existing APIC frames
-        let mut pos: usize = header_size;
-        let mut frames_before_apic: Vec<(String, Vec<u8>)> = Vec::new();
-
-        while pos < tag_end {
-            if pos + 10 > file_data.len() {
-                break;
-            }
-
-            // Read frame header
-            let frame_id = String::from_utf8_lossy(&file_data[pos..pos + 4]).to_string();
-
-            // Check for padding (all zeros)
-            if frame_id.chars().all(|c| c == '\0') {
-                // Padding found, stop reading frames
-                break;
-            }
-
-            // Read frame size
-            let frame_size: usize = if version.0 >= 4 {
-                // ID3v2.4 uses synchsafe integers
-                (((file_data[pos + 4] as u32) << 21) |
-                ((file_data[pos + 5] as u32) << 14) |
-                ((file_data[pos + 6] as u32) << 7) |
-                (file_data[pos + 7] as u32)) as usize
-            } else {
-                // ID3v2.3 uses regular integers
-                (((file_data[pos + 4] as u32) << 24) |
-                ((file_data[pos + 5] as u32) << 16) |
-                ((file_data[pos + 6] as u32) << 8) |
-                (file_data[pos + 7] as u32)) as usize
-            };
-
-            let frame_header_size: usize = 10;
-            let frame_end = pos + frame_header_size + frame_size;
-
-            if frame_end > file_data.len() {
-                break;
-            }
-
-            let frame_data = file_data[pos + frame_header_size..frame_end].to_vec();
-
-            if frame_id != "APIC" {
-                frames_before_apic.push((frame_id, frame_data));
-            }
-
-            pos += frame_header_size + frame_size;
-        }
-
-        // Create new APIC frame
-        let new_apic_frame = create_id3v2_frame("APIC", &apic_data, version.0);
-
-        // Build new tag data
-        let mut new_tag_data = Vec::new();
-
-        // Add frames before APIC
-        for (frame_id, frame_data) in frames_before_apic {
-            new_tag_data.extend_from_slice(&create_id3v2_frame(&frame_id, &frame_data, version.0));
-        }
-
-        // Add new APIC frame
-        new_tag_data.extend_from_slice(&new_apic_frame);
-
-        // Update ID3v2 header with new size
-        let new_tag_size = new_tag_data.len();
-
-        // Calculate synchsafe size (each byte has only 7 bits)
-        let synchsafe_size = to_synchsafe(new_tag_size);
-
-        file_data[6] = ((synchsafe_size >> 21) & 0x7F) as u8;
-        file_data[7] = ((synchsafe_size >> 14) & 0x7F) as u8;
-        file_data[8] = ((synchsafe_size >> 7) & 0x7F) as u8;
-        file_data[9] = (synchsafe_size & 0x7F) as u8;
-
-        // Build new file data
-        let mut new_file_data = Vec::new();
-        new_file_data.extend_from_slice(&file_data[..header_size]);
-        new_file_data.extend_from_slice(&new_tag_data);
-        new_file_data.extend_from_slice(&file_data[tag_end..]);
-
-        // Write modified file
-        std::fs::write(&self.path, new_file_data)?;
-
-        Ok(())
-    }
-
-    /// Get lyrics from audio file
-    fn get_lyrics(&self) -> PyResult<Option<String>> {
-        match self.file_type.as_str() {
-            "flac" => self.get_flac_lyrics(),
-            "id3v2" => self.get_id3v2_lyrics(),
-            _ => Ok(None),
-        }
-    }
-
-    /// Get lyrics from FLAC file
-    fn get_flac_lyrics(&self) -> PyResult<Option<String>> {
-        let file = File::open(&self.path)?;
-        let mut reader = BufReader::new(file);
-
-        // Check FLAC signature
-        let mut signature = [0u8; 4];
-        reader.read_exact(&mut signature)?;
-
-        if signature != *FLAC_SIGNATURE {
-            return Ok(None);
-        }
-
-        // Read metadata blocks
-        loop {
-            match FlacMetadataBlock::read(&mut reader) {
-                Ok(block) => {
-                    if block.header.block_type == FlacMetadataBlockType::VorbisComment {
-                        if let Ok(vorbis) = flac::VorbisComment::read(&mut std::io::Cursor::new(&block.data)) {
-                            if let Some(lyrics) = vorbis.get(VorbisFields::LYRICS) {
-                                return Ok(Some(lyrics.clone()));
-                            }
-                        }
-                    }
-
-                    if block.header.is_last {
-                        break;
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-
-        Ok(None)
-    }
-
-    /// Get lyrics from ID3v2 file
-    fn get_id3v2_lyrics(&self) -> PyResult<Option<String>> {
-        let file = File::open(&self.path)?;
-        let mut reader = BufReader::new(file);
-
-        match Id3v2Tag::read(&mut reader) {
-            Ok(Some(tag)) => {
-                for frame in &tag.frames {
-                    if frame.frame_id == "USLT" {
-                        if let Some((_language, _description, lyrics)) = id3::frames::decode_uslt_frame(&frame.data) {
-                            return Ok(Some(lyrics));
-                        }
-                    }
-                }
-                Ok(None)
-            }
-            Ok(None) => Ok(None),
-            Err(e) => Err(pyo3::exceptions::PyIOError::new_err(e.to_string())),
-        }
-    }
-
-    /// Set lyrics for audio file
-    fn set_lyrics(&self, lyrics: String) -> PyResult<()> {
-        match self.file_type.as_str() {
-            "flac" => self.set_flac_lyrics(lyrics),
-            "id3v2" => self.set_id3v2_lyrics(lyrics),
-            _ => Err(pyo3::exceptions::PyValueError::new_err(
-                format!("File type {} does not support lyrics modification", self.file_type)
-            )),
-        }
-    }
-
-    /// Set lyrics for FLAC file
-    fn set_flac_lyrics(&self, lyrics: String) -> PyResult<()> {
-        // Read the whole file
-        let mut file_data = std::fs::read(&self.path)?;
-
-        // Find Vorbis Comment block
-        let mut pos = 4; // Skip FLAC signature
-        let mut found_vorbis = false;
-
-        while pos < file_data.len() {
-            if pos + 4 > file_data.len() {
-                break;
-            }
-
-            // Read block header
-            let is_last = (file_data[pos] & 0x80) != 0;
-            let block_type = file_data[pos] & 0x7F;
-
-            if block_type == 4 { // Vorbis Comment block type
-                // Read block length
-                let block_length = (((file_data[pos + 1] as u32) << 16) |
-                                  ((file_data[pos + 2] as u32) << 8) |
-                                  (file_data[pos + 3] as u32)) as usize;
-
-                let header_size = 4;
-                let total_size = header_size + block_length;
-
-                // Read existing Vorbis comment
-                let vorbis_data = &file_data[pos + header_size..pos + total_size];
-                if let Ok(mut vorbis) = flac::VorbisComment::read(&mut std::io::Cursor::new(vorbis_data)) {
-                    // Set lyrics
-                    vorbis.set(VorbisFields::LYRICS, &lyrics);
-                    let new_vorbis_data = vorbis.to_bytes();
-
-                    // Update block
-                    let new_block_length = new_vorbis_data.len();
-                    let mut new_header = [0u8; 4];
-                    new_header[0] = if is_last { 0x80 | 4 } else { 4 };
-                    new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
-                    new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
-                    new_header[3] = (new_block_length & 0xFF) as u8;
-
-                    // Replace the block
-                    let mut new_file_data = Vec::new();
-                    new_file_data.extend_from_slice(&file_data[..pos]);
-                    new_file_data.extend_from_slice(&new_header);
-                    new_file_data.extend_from_slice(&new_vorbis_data);
-                    new_file_data.extend_from_slice(&file_data[pos + total_size..]);
-
-                    file_data = new_file_data;
-                    found_vorbis = true;
-                    break;
-                }
-            } else {
-                // Move to next block
-                let block_length: usize = (((file_data[pos + 1] as u32) << 16) |
-                                          ((file_data[pos + 2] as u32) << 8) |
-                                          (file_data[pos + 3] as u32)) as usize;
-                pos += 4 + block_length;
-
-                if is_last {
-                    break;
-                }
-            }
-        }
-
-        // If no Vorbis Comment block found, create a new one
-        if !found_vorbis {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "No Vorbis Comment block found in FLAC file"
-            ));
-        }
-
-        // Write modified file
-        std::fs::write(&self.path, file_data)?;
-
-        Ok(())
-    }
-
-    /// Set lyrics for ID3v2 file
-    fn set_id3v2_lyrics(&self, lyrics: String) -> PyResult<()> {
-        use id3::frames::encode_uslt_frame;
-
-        // Create USLT frame (language: "eng", description: "")
-        let uslt_data = encode_uslt_frame("eng", "", &lyrics);
-
-        // Read the whole file
-        let mut file_data = std::fs::read(&self.path)?;
-
-        // Check for ID3v2 tag
-        if file_data.len() < 10 || &file_data[0..3] != b"ID3" {
-            return Err(pyo3::exceptions::PyValueError::new_err("Not a valid ID3v2 file"));
-        }
-
-        // Get ID3v2 header info
-        let version = (file_data[3], file_data[4]);
-        let tag_size: usize = (((file_data[6] as u32) << 21) |
-                      ((file_data[7] as u32) << 14) |
-                      ((file_data[8] as u32) << 7) |
-                      (file_data[9] as u32)) as usize;
-
-        let header_size: usize = 10;
-        let tag_end: usize = header_size + tag_size;
-
-        // Find and replace existing USLT frames
-        let mut pos: usize = header_size;
-        let mut frames_before_uslt: Vec<(String, Vec<u8>)> = Vec::new();
-
-        while pos < tag_end {
-            if pos + 10 > file_data.len() {
-                break;
-            }
-
-            // Read frame header
-            let frame_id = String::from_utf8_lossy(&file_data[pos..pos + 4]).to_string();
-
-            // Check for padding (all zeros)
-            if frame_id.chars().all(|c| c == '\0') {
-                // Padding found, stop reading frames
-                break;
-            }
-
-            // Read frame size
-            let frame_size: usize = if version.0 >= 4 {
-                // ID3v2.4 uses synchsafe integers
-                (((file_data[pos + 4] as u32) << 21) |
-                ((file_data[pos + 5] as u32) << 14) |
-                ((file_data[pos + 6] as u32) << 7) |
-                (file_data[pos + 7] as u32)) as usize
-            } else {
-                // ID3v2.3 uses regular integers
-                (((file_data[pos + 4] as u32) << 24) |
-                ((file_data[pos + 5] as u32) << 16) |
-                ((file_data[pos + 6] as u32) << 8) |
-                (file_data[pos + 7] as u32)) as usize
-            };
-
-            let frame_header_size: usize = 10;
-            let frame_end = pos + frame_header_size + frame_size;
-
-            if frame_end > file_data.len() {
-                break;
-            }
-
-            let frame_data = file_data[pos + frame_header_size..frame_end].to_vec();
-
-            if frame_id != "USLT" {
-                frames_before_uslt.push((frame_id, frame_data));
-            }
-
-            pos += frame_header_size + frame_size;
-        }
-
-        // Create new USLT frame
-        let new_uslt_frame = create_id3v2_frame("USLT", &uslt_data, version.0);
-
-        // Build new tag data
-        let mut new_tag_data = Vec::new();
-
-        // Add frames before USLT
-        for (frame_id, frame_data) in frames_before_uslt {
-            new_tag_data.extend_from_slice(&create_id3v2_frame(&frame_id, &frame_data, version.0));
-        }
-
-        // Add new USLT frame
-        new_tag_data.extend_from_slice(&new_uslt_frame);
-
-        // Update ID3v2 header with new size
-        let new_tag_size = new_tag_data.len();
-
-        // Calculate synchsafe size (each byte has only 7 bits)
-        let synchsafe_size = to_synchsafe(new_tag_size);
-
-        file_data[6] = ((synchsafe_size >> 21) & 0x7F) as u8;
-        file_data[7] = ((synchsafe_size >> 14) & 0x7F) as u8;
-        file_data[8] = ((synchsafe_size >> 7) & 0x7F) as u8;
-        file_data[9] = (synchsafe_size & 0x7F) as u8;
-
-        // Build new file data
-        let mut new_file_data = Vec::new();
-        new_file_data.extend_from_slice(&file_data[..header_size]);
-        new_file_data.extend_from_slice(&new_tag_data);
-        new_file_data.extend_from_slice(&file_data[tag_end..]);
-
-        // Write modified file
-        std::fs::write(&self.path, new_file_data)?;
-
-        Ok(())
-    }
-
-    /// Remove lyrics from audio file
-    fn remove_lyrics(&self) -> PyResult<()> {
-        match self.file_type.as_str() {
-            "flac" => self.remove_flac_lyrics(),
-            "id3v2" => self.remove_id3v2_lyrics(),
-            _ => Err(pyo3::exceptions::PyValueError::new_err(
-                format!("File type {} does not support lyrics modification", self.file_type)
-            )),
-        }
-    }
-
-    /// Remove lyrics from FLAC file
-    fn remove_flac_lyrics(&self) -> PyResult<()> {
-        // Read the whole file
-        let mut file_data = std::fs::read(&self.path)?;
-
-        // Find Vorbis Comment block
-        let mut pos = 4; // Skip FLAC signature
-        let mut found_vorbis = false;
-
-        while pos < file_data.len() {
-            if pos + 4 > file_data.len() {
-                break;
-            }
-
-            // Read block header
-            let is_last = (file_data[pos] & 0x80) != 0;
-            let block_type = file_data[pos] & 0x7F;
-
-            if block_type == 4 { // Vorbis Comment block type
-                // Read block length
-                let block_length = (((file_data[pos + 1] as u32) << 16) |
-                                  ((file_data[pos + 2] as u32) << 8) |
-                                  (file_data[pos + 3] as u32)) as usize;
-
-                let header_size = 4;
-                let total_size = header_size + block_length;
-
-                // Read existing Vorbis comment
-                let vorbis_data = &file_data[pos + header_size..pos + total_size];
-                if let Ok(mut vorbis) = flac::VorbisComment::read(&mut std::io::Cursor::new(vorbis_data)) {
-                    // Remove lyrics
-                    vorbis.remove(VorbisFields::LYRICS);
-                    let new_vorbis_data = vorbis.to_bytes();
-
-                    // Update block
-                    let new_block_length = new_vorbis_data.len();
-                    let mut new_header = [0u8; 4];
-                    new_header[0] = if is_last { 0x80 | 4 } else { 4 };
-                    new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
-                    new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
-                    new_header[3] = (new_block_length & 0xFF) as u8;
-
-                    // Replace the block
-                    let mut new_file_data = Vec::new();
-                    new_file_data.extend_from_slice(&file_data[..pos]);
-                    new_file_data.extend_from_slice(&new_header);
-                    new_file_data.extend_from_slice(&new_vorbis_data);
-                    new_file_data.extend_from_slice(&file_data[pos + total_size..]);
-
-                    file_data = new_file_data;
-                    found_vorbis = true;
-                    break;
-                }
-            } else {
-                // Move to next block
-                let block_length: usize = (((file_data[pos + 1] as u32) << 16) |
-                                          ((file_data[pos + 2] as u32) << 8) |
-                                          (file_data[pos + 3] as u32)) as usize;
-                pos += 4 + block_length;
-
-                if is_last {
-                    break;
-                }
-            }
-        }
-
-        // If no Vorbis Comment block found, create a new one
-        if !found_vorbis {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "No Vorbis Comment block found in FLAC file"
-            ));
-        }
-
-        // Write modified file
-        std::fs::write(&self.path, file_data)?;
-
-        Ok(())
-    }
-
-    /// Remove lyrics from ID3v2 file
-    fn remove_id3v2_lyrics(&self) -> PyResult<()> {
-        // Read the whole file
-        let mut file_data = std::fs::read(&self.path)?;
-
-        // Check for ID3v2 tag
-        if file_data.len() < 10 || &file_data[0..3] != b"ID3" {
-            return Err(pyo3::exceptions::PyValueError::new_err("Not a valid ID3v2 file"));
-        }
-
-        // Get ID3v2 header info
-        let version = (file_data[3], file_data[4]);
-        let tag_size: usize = (((file_data[6] as u32) << 21) |
-                      ((file_data[7] as u32) << 14) |
-                      ((file_data[8] as u32) << 7) |
-                      (file_data[9] as u32)) as usize;
-
-        let header_size: usize = 10;
-        let tag_end: usize = header_size + tag_size;
-
-        // Find and remove existing USLT frames
-        let mut pos: usize = header_size;
-        let mut frames: Vec<(String, Vec<u8>)> = Vec::new();
-
-        while pos < tag_end {
-            if pos + 10 > file_data.len() {
-                break;
-            }
-
-            // Read frame header
-            let frame_id = String::from_utf8_lossy(&file_data[pos..pos + 4]).to_string();
-
-            // Check for padding (all zeros)
-            if frame_id.chars().all(|c| c == '\0') {
-                // Padding found, stop reading frames
-                break;
-            }
-
-            // Read frame size
-            let frame_size: usize = if version.0 >= 4 {
-                // ID3v2.4 uses synchsafe integers
-                (((file_data[pos + 4] as u32) << 21) |
-                ((file_data[pos + 5] as u32) << 14) |
-                ((file_data[pos + 6] as u32) << 7) |
-                (file_data[pos + 7] as u32)) as usize
-            } else {
-                // ID3v2.3 uses regular integers
-                (((file_data[pos + 4] as u32) << 24) |
-                ((file_data[pos + 5] as u32) << 16) |
-                ((file_data[pos + 6] as u32) << 8) |
-                (file_data[pos + 7] as u32)) as usize
-            };
-
-            let frame_header_size: usize = 10;
-            let frame_end = pos + frame_header_size + frame_size;
-
-            if frame_end > file_data.len() {
-                break;
-            }
-
-            let frame_data = file_data[pos + frame_header_size..frame_end].to_vec();
-
-            // Keep all frames except USLT
-            if frame_id != "USLT" {
-                frames.push((frame_id, frame_data));
-            }
-
-            pos += frame_header_size + frame_size;
-        }
-
-        // Build new tag data
-        let mut new_tag_data = Vec::new();
-
-        // Add all frames except USLT
-        for (frame_id, frame_data) in frames {
-            new_tag_data.extend_from_slice(&create_id3v2_frame(&frame_id, &frame_data, version.0));
-        }
-
-        // Update ID3v2 header with new size
-        let new_tag_size = new_tag_data.len();
-
-        // Calculate synchsafe size (each byte has only 7 bits)
-        let synchsafe_size = to_synchsafe(new_tag_size);
-
-        file_data[6] = ((synchsafe_size >> 21) & 0x7F) as u8;
-        file_data[7] = ((synchsafe_size >> 14) & 0x7F) as u8;
-        file_data[8] = ((synchsafe_size >> 7) & 0x7F) as u8;
-        file_data[9] = (synchsafe_size & 0x7F) as u8;
-
-        // Build new file data
-        let mut new_file_data = Vec::new();
-        new_file_data.extend_from_slice(&file_data[..header_size]);
-        new_file_data.extend_from_slice(&new_tag_data);
-        new_file_data.extend_from_slice(&file_data[tag_end..]);
-
-        // Write modified file
-        std::fs::write(&self.path, new_file_data)?;
-
-        Ok(())
-    }
-
-    /// Set title for FLAC file
-    fn set_flac_title(&self, title: String) -> PyResult<()> {
-        self.set_flac_vorbis_field(VorbisFields::TITLE, &title)
-    }
-
-    /// Set artist for FLAC file
-    fn set_flac_artist(&self, artist: String) -> PyResult<()> {
-        self.set_flac_vorbis_field(VorbisFields::ARTIST, &artist)
-    }
-
-    /// Set album for FLAC file
-    fn set_flac_album(&self, album: String) -> PyResult<()> {
-        self.set_flac_vorbis_field(VorbisFields::ALBUM, &album)
-    }
-
-    /// Set year for FLAC file
-    fn set_flac_year(&self, year: String) -> PyResult<()> {
-        self.set_flac_vorbis_field(VorbisFields::DATE, &year)
-    }
-
-    /// Set track number for FLAC file
-    fn set_flac_track(&self, track: String) -> PyResult<()> {
-        self.set_flac_vorbis_field(VorbisFields::TRACKNUMBER, &track)
-    }
-
-    /// Set genre for FLAC file
-    fn set_flac_genre(&self, genre: String) -> PyResult<()> {
-        self.set_flac_vorbis_field(VorbisFields::GENRE, &genre)
-    }
-
-    /// Set comment for FLAC file
-    fn set_flac_comment(&self, comment: String) -> PyResult<()> {
-        self.set_flac_vorbis_field(VorbisFields::COMMENT, &comment)
-    }
-
-    /// Helper method to set a Vorbis comment field in FLAC file
-    fn set_flac_vorbis_field(&self, field: &str, value: &str) -> PyResult<()> {
-        // Read the whole file
-        let mut file_data = std::fs::read(&self.path)?;
-
-        // Find Vorbis Comment block
-        let mut pos = 4; // Skip FLAC signature
-        let mut found_vorbis = false;
-
-        while pos < file_data.len() {
-            if pos + 4 > file_data.len() {
-                break;
-            }
-
-            // Read block header
-            let is_last = (file_data[pos] & 0x80) != 0;
-            let block_type = file_data[pos] & 0x7F;
-
-            if block_type == 4 { // Vorbis Comment block type
-                // Read block length
-                let block_length = (((file_data[pos + 1] as u32) << 16) |
-                                  ((file_data[pos + 2] as u32) << 8) |
-                                  (file_data[pos + 3] as u32)) as usize;
-
-                let header_size = 4;
-                let total_size = header_size + block_length;
-
-                // Read existing Vorbis comment
-                let vorbis_data = &file_data[pos + header_size..pos + total_size];
-                if let Ok(mut vorbis) = flac::VorbisComment::read(&mut std::io::Cursor::new(vorbis_data)) {
-                    // Set the field
-                    vorbis.set(field, value);
-                    let new_vorbis_data = vorbis.to_bytes();
-
-                    // Update block
-                    let new_block_length = new_vorbis_data.len();
-                    let mut new_header = [0u8; 4];
-                    new_header[0] = if is_last { 0x80 | 4 } else { 4 };
-                    new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
-                    new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
-                    new_header[3] = (new_block_length & 0xFF) as u8;
-
-                    // Replace the block
-                    let mut new_file_data = Vec::new();
-                    new_file_data.extend_from_slice(&file_data[..pos]);
-                    new_file_data.extend_from_slice(&new_header);
-                    new_file_data.extend_from_slice(&new_vorbis_data);
-                    new_file_data.extend_from_slice(&file_data[pos + total_size..]);
-
-                    file_data = new_file_data;
-                    found_vorbis = true;
-                    break;
-                }
-            } else {
-                // Move to next block
-                let block_length: usize = (((file_data[pos + 1] as u32) << 16) |
-                                          ((file_data[pos + 2] as u32) << 8) |
-                                          (file_data[pos + 3] as u32)) as usize;
-                pos += 4 + block_length;
-
-                if is_last {
-                    break;
-                }
-            }
-        }
-
-        // If no Vorbis Comment block found, create a new one
-        if !found_vorbis {
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                "No Vorbis Comment block found in FLAC file"
-            ));
-        }
-
-        // Write modified file
-        std::fs::write(&self.path, file_data)?;
-
-        Ok(())
     }
 
     /// Write all metadata to ID3v2 file
@@ -1135,7 +358,7 @@ impl AudioFile {
 
         // Add existing non-metadata frames first
         for (frame_id, frame_data) in &existing_frames {
-            if !["APIC", "USLT"].contains(&frame_id.as_str()) {
+            if frame_id != "USLT" {
                 new_tag_data.extend_from_slice(&create_id3v2_frame(frame_id, frame_data, version.0));
             }
         }
@@ -1178,10 +401,14 @@ impl AudioFile {
             new_tag_data.extend_from_slice(&create_id3v2_frame("USLT", &frame_data, version.0));
         }
 
-        // Add back APIC frames (cover art)
-        if let Some(apic_data) = existing_frames.get("APIC") {
-            new_tag_data.extend_from_slice(&create_id3v2_frame("APIC", apic_data, version.0));
+        // Add cover art (APIC frame)
+        if let Some(cover_data) = &metadata.cover {
+            use id3::frames::{encode_apic_frame, PictureType};
+            let cover = CoverArt::from(cover_data.clone());
+            let apic_data = encode_apic_frame(&cover.mime_type, PictureType::CoverFront, &cover.description, &cover.data);
+            new_tag_data.extend_from_slice(&create_id3v2_frame("APIC", &apic_data, version.0));
         }
+        // Note: If metadata.cover is None, we don't add APIC frame (effectively removing it)
 
         // Update ID3v2 header with new size
         let new_tag_size = new_tag_data.len();
@@ -1381,6 +608,139 @@ impl AudioFile {
             ));
         }
 
+        // Handle cover art (PICTURE block)
+        // Process in a second pass to handle both update and removal
+        let file_data_for_picture = file_data.clone();
+        let mut pos = 4; // Skip FLAC signature
+        let mut found_picture_block = false;
+
+        while pos < file_data_for_picture.len() {
+            if pos + 4 > file_data_for_picture.len() {
+                break;
+            }
+
+            // Read block header
+            let is_last = (file_data_for_picture[pos] & 0x80) != 0;
+            let block_type = file_data_for_picture[pos] & 0x7F;
+
+            if block_type == 6 { // Picture block type
+                found_picture_block = true;
+
+                // If cover is None, remove the picture block
+                if metadata.cover.is_none() {
+                    let block_length = (((file_data_for_picture[pos + 1] as u32) << 16) |
+                                      ((file_data_for_picture[pos + 2] as u32) << 8) |
+                                      (file_data_for_picture[pos + 3] as u32)) as usize;
+                    let total_size = 4 + block_length;
+
+                    // Remove this block
+                    let mut new_file_data = Vec::new();
+                    new_file_data.extend_from_slice(&file_data_for_picture[..pos]);
+                    new_file_data.extend_from_slice(&file_data_for_picture[pos + total_size..]);
+
+                    // Update previous block's last flag if this was the last block
+                    if is_last && pos > 4 {
+                        // Find the previous block and mark it as last
+                        let mut prev_pos = 4;
+                        let _last_found = false;
+                        while prev_pos < pos {
+                            if prev_pos + 4 > file_data_for_picture.len() {
+                                break;
+                            }
+                            let prev_is_last = (file_data_for_picture[prev_pos] & 0x80) != 0;
+                            if prev_is_last {
+                                break;
+                            }
+                            let prev_block_len = (((file_data_for_picture[prev_pos + 1] as u32) << 16) |
+                                              ((file_data_for_picture[prev_pos + 2] as u32) << 8) |
+                                              (file_data_for_picture[prev_pos + 3] as u32)) as usize;
+                            prev_pos += 4 + prev_block_len;
+                        }
+                        if prev_pos > 4 && prev_pos < pos {
+                            new_file_data[prev_pos - 4] |= 0x80; // Set last flag
+                        }
+                    }
+
+                    file_data = new_file_data;
+                } else {
+                    // Update existing picture block with new data
+                    let cover = CoverArt::from(metadata.cover.as_ref().unwrap().clone());
+                    let new_picture = FlacPicture::new(cover.data, cover.mime_type, cover.description);
+                    let picture_data = new_picture.to_bytes();
+
+                    // Read block length
+                    let block_length = (((file_data_for_picture[pos + 1] as u32) << 16) |
+                                      ((file_data_for_picture[pos + 2] as u32) << 8) |
+                                      (file_data_for_picture[pos + 3] as u32)) as usize;
+
+                    let header_size = 4;
+                    let total_size = header_size + block_length;
+
+                    // Create new block header
+                    let new_block_length = picture_data.len();
+                    let mut new_header = [0u8; 4];
+                    new_header[0] = if is_last { 0x80 | 6 } else { 6 };
+                    new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
+                    new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
+                    new_header[3] = (new_block_length & 0xFF) as u8;
+
+                    // Replace the block
+                    let mut new_file_data = Vec::new();
+                    new_file_data.extend_from_slice(&file_data_for_picture[..pos]);
+                    new_file_data.extend_from_slice(&new_header);
+                    new_file_data.extend_from_slice(&picture_data);
+                    new_file_data.extend_from_slice(&file_data_for_picture[pos + total_size..]);
+
+                    file_data = new_file_data;
+                }
+                break;
+            } else {
+                // Move to next block
+                let block_length: usize = (((file_data_for_picture[pos + 1] as u32) << 16) |
+                                          ((file_data_for_picture[pos + 2] as u32) << 8) |
+                                          (file_data_for_picture[pos + 3] as u32)) as usize;
+                pos += 4 + block_length;
+
+                if is_last {
+                    break;
+                }
+            }
+        }
+
+        // If there was no picture block but we want to add one
+        if !found_picture_block {
+            if let Some(cover_data) = &metadata.cover {
+                let cover = CoverArt::from(cover_data.clone());
+                let new_picture = FlacPicture::new(cover.data, cover.mime_type, cover.description);
+                let picture_data = new_picture.to_bytes();
+
+                // Find the position before audio data (after last metadata block)
+                let insert_pos = pos;
+
+                // Create new picture block
+                let mut new_header = [0u8; 4];
+                let new_block_length = picture_data.len();
+                new_header[0] = 0x80 | 6; // Last block + Picture type
+                new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
+                new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
+                new_header[3] = (new_block_length & 0xFF) as u8;
+
+                // Update the previous block's last flag
+                if insert_pos > 4 {
+                    file_data[insert_pos - 4] &= 0x7F; // Clear last flag
+                }
+
+                // Insert new block
+                let mut new_file_data = Vec::new();
+                new_file_data.extend_from_slice(&file_data[..insert_pos]);
+                new_file_data.extend_from_slice(&new_header);
+                new_file_data.extend_from_slice(&picture_data);
+                new_file_data.extend_from_slice(&file_data[insert_pos..]);
+
+                file_data = new_file_data;
+            }
+        }
+
         // Write modified file
         std::fs::write(&self.path, file_data)?;
 
@@ -1399,14 +759,20 @@ impl AudioFile {
     }
 
     /// Get all metadata as JSON string
-    fn get_metadata_json(&self) -> PyResult<String> {
-        let metadata = self.read_metadata()?;
+    fn get_metadata(&self) -> PyResult<String> {
+        let mut metadata = self.read_metadata()?;
+
+        // Read cover art if available
+        if let Ok(Some(cover)) = self.read_cover() {
+            metadata.cover = Some(CoverArtData::from(cover));
+        }
+
         serde_json::to_string(&metadata)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
     }
 
     /// Set metadata from JSON string
-    fn set_metadata_from_json(&self, json_str: String) -> PyResult<()> {
+    fn set_metadata(&self, json_str: String) -> PyResult<()> {
         // Read existing metadata first to preserve file_type and version
         let mut metadata = self.read_metadata()?;
 
@@ -1442,6 +808,19 @@ impl AudioFile {
             // Explicitly set to None if present but null
             metadata.lyrics = None;
         }
+
+        // Handle cover art
+        if updates.get("cover").is_some() {
+            // Cover field is present in JSON
+            if let Some(cover_value) = updates.get("cover") {
+                if cover_value.is_null() {
+                    metadata.cover = None;
+                } else if let Ok(cover_data) = serde_json::from_value::<CoverArtData>(cover_value.clone()) {
+                    metadata.cover = Some(cover_data);
+                }
+            }
+        }
+        // If cover field is not present in JSON, keep existing cover (metadata.cover remains as read from file)
 
         // Update based on file type
         match self.file_type.as_str() {
@@ -1561,6 +940,44 @@ impl CoverArt {
     }
 }
 
+/// Cover art data structure for JSON serialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoverArtData {
+    pub mime_type: String,
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    pub description: String,
+    #[serde(serialize_with = "serialize_as_base64", deserialize_with = "deserialize_base64_to_vec")]
+    pub data: Vec<u8>,
+}
+
+impl From<CoverArt> for CoverArtData {
+    fn from(cover: CoverArt) -> Self {
+        CoverArtData {
+            mime_type: cover.mime_type,
+            width: cover.width,
+            height: cover.height,
+            depth: cover.depth,
+            description: cover.description,
+            data: cover.data,
+        }
+    }
+}
+
+impl From<CoverArtData> for CoverArt {
+    fn from(data: CoverArtData) -> Self {
+        CoverArt {
+            mime_type: data.mime_type,
+            width: data.width,
+            height: data.height,
+            depth: data.depth,
+            description: data.description,
+            data: data.data,
+        }
+    }
+}
+
 /// Audio metadata structure
 #[pyclass]
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -1587,6 +1004,8 @@ pub struct Metadata {
     pub comment: Option<String>,
     #[pyo3(get, set)]
     pub lyrics: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<CoverArtData>,
 }
 
 #[pymethods]

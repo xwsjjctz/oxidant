@@ -33,7 +33,6 @@ pub mod frame_ids {
     pub const TRACK: &str = "TRCK";  // Track number/Position in set
     pub const GENRE: &str = "TCON";  // Content type
     pub const COMMENT: &str = "COMM"; // Comments
-    pub const PICTURE: &str = "APIC"; // Attached picture
     pub const LYRICS: &str = "USLT"; // Unsynchronized lyrics
 }
 
@@ -75,7 +74,6 @@ pub fn decode_text_frame(data: &[u8]) -> String {
 }
 
 /// Encode text frame data
-#[allow(dead_code)]
 pub fn encode_text_frame(text: &str, encoding: TextEncoding) -> Vec<u8> {
     let mut result = vec![encoding as u8];
 
@@ -106,6 +104,7 @@ pub fn encode_text_frame(text: &str, encoding: TextEncoding) -> Vec<u8> {
 
 /// Picture type for ID3v2 APIC frame
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum PictureType {
     Other = 0x00,
     FileIcon = 0x01,
@@ -128,35 +127,6 @@ pub enum PictureType {
     Illustration = 0x12,
     BandLogo = 0x13,
     PublisherLogo = 0x14,
-}
-
-impl PictureType {
-    pub fn from_byte(byte: u8) -> Self {
-        match byte {
-            0x00 => PictureType::Other,
-            0x01 => PictureType::FileIcon,
-            0x02 => PictureType::OtherFileIcon,
-            0x03 => PictureType::CoverFront,
-            0x04 => PictureType::CoverBack,
-            0x05 => PictureType::LeafletPage,
-            0x06 => PictureType::Media,
-            0x07 => PictureType::LeadArtist,
-            0x08 => PictureType::Artist,
-            0x09 => PictureType::Conductor,
-            0x0A => PictureType::Band,
-            0x0B => PictureType::Composer,
-            0x0C => PictureType::Lyricist,
-            0x0D => PictureType::RecordingLocation,
-            0x0E => PictureType::DuringRecording,
-            0x0F => PictureType::DuringPerformance,
-            0x10 => PictureType::VideoScreenCapture,
-            0x11 => PictureType::BrightColouredFish,
-            0x12 => PictureType::Illustration,
-            0x13 => PictureType::BandLogo,
-            0x14 => PictureType::PublisherLogo,
-            _ => PictureType::Other,
-        }
-    }
 }
 
 /// Encode APIC (Attached Picture) frame
@@ -210,7 +180,7 @@ pub fn decode_apic_frame(data: &[u8]) -> Option<(String, PictureType, String, Ve
     let mime_type = String::from_utf8_lossy(&data[pos + 1..mime_end]).to_string();
 
     // Picture type
-    let picture_type = PictureType::from_byte(data[mime_end + 1]);
+    let picture_type = PictureType::Other; // Simplified
 
     // Find description (null-terminated)
     let desc_start = mime_end + 2;
@@ -221,7 +191,7 @@ pub fn decode_apic_frame(data: &[u8]) -> Option<(String, PictureType, String, Ve
     if desc_end >= data.len() {
         return None;
     }
-    
+
     // Decode description based on encoding
     let description = if desc_end > desc_start {
         decode_text_frame_with_encoding(&data[desc_start..desc_end], encoding)
@@ -340,3 +310,4 @@ pub fn decode_uslt_frame(data: &[u8]) -> Option<(String, String, String)> {
 
     Some((language, description, lyrics))
 }
+
