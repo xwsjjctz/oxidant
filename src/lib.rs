@@ -646,7 +646,7 @@ impl BatchProcessor {
         let mut results = Vec::new();
         let total = updates.len();
 
-        for (index, (path, metadata_json)) in updates.iter().enumerate() {
+        for (index, (path, _metadata_json)) in updates.iter().enumerate() {
             if self.show_progress {
                 println!("Writing {}/{}: {}", index + 1, total, path);
             }

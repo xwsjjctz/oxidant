@@ -26,5 +26,3 @@ demand.md
 NEW_NOTICE.md
 .python-version
 analysis.md
-pyproject.toml
-uv.lock
