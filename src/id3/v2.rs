@@ -14,6 +14,7 @@ pub struct Id3v2Header {
 /// ID3v2 tag structure
 #[derive(Debug)]
 pub struct Id3v2Tag {
+    #[allow(dead_code)]
     pub header: Id3v2Header,
     pub frames: Vec<Id3Frame>,
 }

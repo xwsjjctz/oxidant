@@ -30,6 +30,7 @@
 // - Lyrics: Lyrics
 
 pub const APE_SIGNATURE: &[u8; 8] = b"APETAGEX";
+#[allow(dead_code)]
 pub const APE_VERSION: u32 = 2000;
 
 // APE tag field names
@@ -255,6 +256,7 @@ pub struct ApeMetadata {
 }
 
 /// Detect if file is APE format
+#[allow(dead_code)]
 pub fn is_ape_file(path: &str) -> bool {
     if let Ok(file_data) = std::fs::read(path) {
         // APE files have MAC signature at beginning

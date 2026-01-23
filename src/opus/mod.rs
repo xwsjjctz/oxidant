@@ -17,7 +17,9 @@
 use std::io::{BufRead, Read};
 use std::fs::File;
 
+#[allow(dead_code)]
 pub const OPUS_SIGNATURE: &[u8; 8] = b"OpusHead";
+#[allow(dead_code)]
 pub const OPUS_TAGS: &[u8; 8] = b"OpusTags";
 
 // Re-export FLAC's VorbisComment types since they're compatible
@@ -49,6 +51,7 @@ impl OpusFile {
     }
 
     /// Write Vorbis comment to OPUS file
+    #[allow(dead_code)]
     pub fn write_comment(&self, comment: &VorbisComment) -> std::io::Result<()> {
         // Read the entire file
         let mut file_data = std::fs::read(&self.path)?;
@@ -197,6 +200,7 @@ fn read_opus_comment_page<R: BufRead>(reader: &mut R) -> Option<Vec<u8>> {
 }
 
 /// Create segment table for given data size
+#[allow(dead_code)]
 fn create_segment_table(size: usize) -> Vec<u8> {
     let mut table = Vec::new();
     let mut remaining = size;
@@ -211,6 +215,7 @@ fn create_segment_table(size: usize) -> Vec<u8> {
 }
 
 /// Detect if file is OPUS format
+#[allow(dead_code)]
 pub fn is_opus_file(path: &str) -> bool {
     if let Ok(mut file) = File::open(path) {
         let mut signature = [0u8; 4];

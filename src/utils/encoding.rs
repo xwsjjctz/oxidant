@@ -4,6 +4,7 @@ use encoding_rs::{UTF_16BE, UTF_16LE, UTF_8, WINDOWS_1252};
 
 /// Text encoding types
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]  // Reserved for future use
 pub enum TextEncoding {
     Iso8859_1 = 0,
     Utf16 = 1,
@@ -12,6 +13,7 @@ pub enum TextEncoding {
 }
 
 impl TextEncoding {
+    #[allow(dead_code)]
     pub fn from_byte(byte: u8) -> Self {
         match byte {
             0 => TextEncoding::Iso8859_1,
@@ -24,6 +26,7 @@ impl TextEncoding {
 }
 
 /// Decode text with specified encoding
+#[allow(dead_code)]
 pub fn decode_text(data: &[u8], encoding: TextEncoding) -> String {
     match encoding {
         TextEncoding::Iso8859_1 => {

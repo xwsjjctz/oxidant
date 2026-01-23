@@ -4,6 +4,7 @@ use encoding_rs::{UTF_16BE, UTF_16LE, UTF_8, WINDOWS_1252};
 
 /// Text encoding types
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]  // Reserved for future use
 pub enum TextEncoding {
     Iso8859_1 = 0,
     Utf16 = 1,
@@ -12,6 +13,7 @@ pub enum TextEncoding {
 }
 
 impl TextEncoding {
+    #[allow(dead_code)]
     pub fn from_byte(byte: u8) -> Self {
         match byte {
             0 => TextEncoding::Iso8859_1,
@@ -74,6 +76,7 @@ pub fn decode_text_frame(data: &[u8]) -> String {
 }
 
 /// Encode text frame data
+#[allow(dead_code)]
 pub fn encode_text_frame(text: &str, encoding: TextEncoding) -> Vec<u8> {
     let mut result = vec![encoding as u8];
 
@@ -130,6 +133,7 @@ pub enum PictureType {
 }
 
 /// Encode APIC (Attached Picture) frame
+#[allow(dead_code)]
 pub fn encode_apic_frame(
     mime_type: &str,
     picture_type: PictureType,
@@ -159,6 +163,7 @@ pub fn encode_apic_frame(
 }
 
 /// Decode APIC (Attached Picture) frame
+#[allow(dead_code)]
 pub fn decode_apic_frame(data: &[u8]) -> Option<(String, PictureType, String, Vec<u8>)> {
     if data.is_empty() {
         return None;
@@ -239,6 +244,7 @@ fn decode_text_frame_with_encoding(data: &[u8], encoding: TextEncoding) -> Strin
 }
 
 /// Encode USLT (Unsynchronized Lyrics) frame
+#[allow(dead_code)]
 pub fn encode_uslt_frame(
     language: &str,
     description: &str,

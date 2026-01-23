@@ -5,12 +5,14 @@ use std::io::Read;
 /// Vorbis comment structure
 #[derive(Debug, Default)]
 pub struct VorbisComment {
+    #[allow(dead_code)]
     pub vendor_string: String,
     pub comments: Vec<(String, String)>,
 }
 
 impl VorbisComment {
     /// Read Vorbis comment from reader
+    #[allow(dead_code)]
     pub fn read<R: Read>(reader: &mut R) -> std::io::Result<Self> {
         // Read vendor string length (little-endian 32-bit)
         let mut vendor_length_bytes = [0u8; 4];
@@ -53,6 +55,7 @@ impl VorbisComment {
     }
 
     /// Get a comment value by field name
+    #[allow(dead_code)]
     pub fn get(&self, field: &str) -> Option<&String> {
         self.comments
             .iter()
@@ -61,6 +64,7 @@ impl VorbisComment {
     }
 
     /// Set a comment value by field name
+    #[allow(dead_code)]
     pub fn set(&mut self, field: &str, value: &str) {
         // Remove existing comment with the same field (case-insensitive)
         self.comments.retain(|(f, _)| !f.eq_ignore_ascii_case(field));
@@ -69,11 +73,13 @@ impl VorbisComment {
     }
 
     /// Remove a comment by field name
+    #[allow(dead_code)]
     pub fn remove(&mut self, field: &str) {
         self.comments.retain(|(f, _)| !f.eq_ignore_ascii_case(field));
     }
 
     /// Convert Vorbis comment to bytes
+    #[allow(dead_code)]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
@@ -98,15 +104,24 @@ impl VorbisComment {
 }
 
 /// Common Vorbis comment field names
+#[allow(dead_code)]
 pub struct VorbisFields;
 impl VorbisFields {
+    #[allow(dead_code)]
     pub const TITLE: &str = "TITLE";
+    #[allow(dead_code)]
     pub const ARTIST: &str = "ARTIST";
+    #[allow(dead_code)]
     pub const ALBUM: &str = "ALBUM";
+    #[allow(dead_code)]
     pub const DATE: &str = "DATE";
+    #[allow(dead_code)]
     pub const TRACKNUMBER: &str = "TRACKNUMBER";
+    #[allow(dead_code)]
     pub const GENRE: &str = "GENRE";
+    #[allow(dead_code)]
     pub const COMMENT: &str = "COMMENT";
+    #[allow(dead_code)]
     pub const LYRICS: &str = "LYRICS";
 }
 

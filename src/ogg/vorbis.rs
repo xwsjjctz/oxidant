@@ -33,6 +33,7 @@ impl OggVorbisFile {
     }
 
     /// Write Vorbis comment to OGG file
+    #[allow(dead_code)]
     pub fn write_comment(&self, comment: &VorbisComment) -> std::io::Result<()> {
         // Read the entire file
         let mut file_data = std::fs::read(&self.path)?;
@@ -121,6 +122,7 @@ impl OggVorbisFile {
     }
 
     /// Create segment table for given data size
+    #[allow(dead_code)]
     fn create_segment_table(size: usize) -> Vec<u8> {
         let mut table = Vec::new();
         let mut remaining = size;

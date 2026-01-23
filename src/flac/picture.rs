@@ -4,6 +4,7 @@ use std::io::Read;
 
 /// Picture types according to FLAC specification
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]  // Reserved for future use
 pub enum PictureType {
     Other = 0,
     FileIcon = 1,
@@ -29,6 +30,7 @@ pub enum PictureType {
 }
 
 impl PictureType {
+    #[allow(dead_code)]
     pub fn from_u32(value: u32) -> Self {
         match value {
             0 => PictureType::Other,
@@ -86,19 +88,29 @@ pub fn to_string(&self) -> &'static str {
 
 /// FLAC PICTURE block structure
 #[derive(Debug)]
+#[allow(dead_code)]  // Reserved for future use
 pub struct FlacPicture {
+    #[allow(dead_code)]
     pub picture_type: PictureType,
+    #[allow(dead_code)]
     pub mime_type: String,
+    #[allow(dead_code)]
     pub description: String,
+    #[allow(dead_code)]
     pub width: u32,
+    #[allow(dead_code)]
     pub height: u32,
+    #[allow(dead_code)]
     pub depth: u32,
+    #[allow(dead_code)]
     pub colors: u32,
+    #[allow(dead_code)]
     pub data: Vec<u8>,
 }
 
 impl FlacPicture {
     /// Read FLAC PICTURE block from data
+    #[allow(dead_code)]
     pub fn read_from_data(data: &[u8]) -> std::io::Result<Self> {
         let mut cursor = std::io::Cursor::new(data);
 
@@ -183,6 +195,7 @@ impl FlacPicture {
     }
 
     /// Encode FlacPicture to bytes
+    #[allow(dead_code)]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut result = Vec::new();
 
@@ -220,6 +233,7 @@ impl FlacPicture {
     }
 
     /// Create a new FlacPicture from image data
+    #[allow(dead_code)]
     pub fn new(data: Vec<u8>, mime_type: String, description: String) -> Self {
         FlacPicture {
             picture_type: PictureType::CoverFront,

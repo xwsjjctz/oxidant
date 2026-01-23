@@ -24,6 +24,8 @@
 - 🐍 简单易用的 Python API
 - 📦 JSON 格式的元数据交换
 - 🔧 统一的元数据字段映射系统
+- 🛠️ 独立的 CLI 命令行工具
+- 📚 纯 Rust 库支持（不依赖 Python）
 
 ## 支持的格式
 
@@ -47,11 +49,16 @@
 
 ### 环境要求
 
-- Python 3.8+
+- Python 3.8+ （仅 Python 模块）
 - Rust 1.70+
-- uv (推荐) 或 pip
+- uv (推荐) 或 pip （仅 Python 模块）
+- cargo （Rust 库和 CLI）
 
-### 使用 uv 安装
+### 三种使用方式
+
+Oxidant 支持三种使用方式：
+
+#### 1. Python 模块
 
 ```bash
 # 克隆仓库
@@ -65,17 +72,59 @@ uv pip install -e .
 uv run maturin develop
 ```
 
-### 使用 pip 安装
+#### 2. Rust 库
 
 ```bash
 # 克隆仓库
 git clone https://github.com/xwsjjctz/oxidant.git
 cd oxidant
 
-# 安装 maturin
-pip install maturin
+# 构建为 Rust 库
+cargo build --lib
 
-# 构建并安装
+# 在其他 Rust 项目中使用
+# 在 Cargo.toml 中添加：
+# [dependencies]
+# oxidant = { path = "/path/to/oxidant" }
+```
+
+#### 3. CLI 工具
+
+```bash
+# 克隆仓库
+git clone https://github.com/xwsjjctz/oxidant.git
+cd oxidant
+
+# 构建 CLI 工具
+cargo build --release
+
+# CLI 二进制文件位置
+# 开发版本: target/debug/oxidant
+# 发布版本: target/release/oxidant
+
+# 使用示例
+./target/release/oxidant --help
+./target/release/oxidant detect song.mp3
+./target/release/oxidant read song.mp3
+```
+
+### 使用 uv 安装（仅 Python 模块）
+
+```bash
+# 克隆仓库
+git clone https://github.com/xwsjjctz/oxidant.git
+cd oxidant
+
+# 使用 uv 安装依赖
+uv pip install -e .
+
+# 或者使用 maturin 直接构建
+uv run maturin develop
+```
+
+**注意**：如果不使用 uv，也可以使用 pip：
+```bash
+pip install maturin
 maturin develop
 ```
 
@@ -196,6 +245,71 @@ metadata_without_cover = {
 audio_file.set_metadata(json.dumps(metadata_without_cover))
 print("封面已删除")
 ```
+
+## CLI 工具
+
+Oxidant 提供了命令行工具 `oxidant`，可以快速读取和检测音频文件的元数据。
+
+### 安装 CLI
+
+```bash
+# 构建并安装 Python 模块和 CLI
+uv run maturin develop
+
+# 或使用 cargo 直接构建 CLI
+cargo build --release
+
+# CLI 二进制文件位置
+# 开发版本: target/debug/oxidant
+# 发布版本: target/release/oxidant
+```
+
+### 使用示例
+
+#### 查看帮助
+
+```bash
+oxidant --help
+```
+
+#### 检测文件格式
+
+```bash
+# 检测单个文件
+oxidant detect song.mp3
+
+# 检测多个文件
+oxidant detect song.mp3 album.flac track.ogg
+```
+
+#### 读取元数据
+
+```bash
+# 读取并显示元数据（JSON 格式）
+oxidant read song.mp3
+
+# 安静模式（仅输出 JSON）
+oxidant read song.mp3 --quiet
+
+# 输出到文件
+oxidant read song.mp3 --output metadata.json
+```
+
+### CLI 命令
+
+| 命令 | 说明 |
+|------|------|
+| `read` | 读取音频文件的元数据 |
+| `detect` | 检测音频文件的格式 |
+| `--help` | 显示帮助信息 |
+| `--version` | 显示版本信息 |
+
+### CLI 选项
+
+| 选项 | 简写 | 说明 |
+|------|------|------|
+| `--format` | `-f` | 输出格式（pretty/json） |
+| `--quiet` | `-q` | 安静模式，仅输出结果 |
 
 ## API 文档
 
