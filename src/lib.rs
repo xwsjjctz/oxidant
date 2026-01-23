@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::Bound;
+use pyo3::types::PyList;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use serde::{Serialize, Deserialize, Serializer};
@@ -45,6 +46,8 @@ fn oxidant(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<AudioFile>()?;
     m.add_class::<Metadata>()?;
     m.add_class::<CoverArt>()?;
+    m.add_class::<BatchProcessor>()?;
+    m.add_class::<BatchResult>()?;
     Ok(())
 }
 
@@ -2052,6 +2055,210 @@ impl Metadata {
     }
 
     /// Representation
+    fn __repr__(&self) -> String {
+        self.__str__()
+    }
+}
+
+/// Batch processing result
+#[pyclass]
+#[derive(Clone)]
+pub struct BatchResult {
+    #[pyo3(get)]
+    pub file_path: String,
+    #[pyo3(get)]
+    pub success: bool,
+    #[pyo3(get)]
+    pub error_message: Option<String>,
+}
+
+#[pymethods]
+impl BatchResult {
+    #[new]
+    fn new(file_path: String, success: bool, error_message: Option<String>) -> Self {
+        BatchResult {
+            file_path,
+            success,
+            error_message,
+        }
+    }
+
+    fn __str__(&self) -> String {
+        if self.success {
+            format!("✓ {}", self.file_path)
+        } else {
+            format!("✗ {} - {}", self.file_path, self.error_message.as_deref().unwrap_or("Unknown error"))
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        self.__str__()
+    }
+}
+
+/// Batch processor for multiple audio files
+#[pyclass]
+pub struct BatchProcessor {
+    #[pyo3(get, set)]
+    pub show_progress: bool,
+}
+
+#[pymethods]
+impl BatchProcessor {
+    #[new]
+    fn new() -> Self {
+        BatchProcessor {
+            show_progress: true,
+        }
+    }
+
+    /// Read metadata from multiple audio files
+    fn read_metadata_batch(&self, file_paths: Vec<String>) -> PyResult<Vec<String>> {
+        let mut results = Vec::new();
+        let total = file_paths.len();
+
+        for (index, path) in file_paths.iter().enumerate() {
+            if self.show_progress {
+                println!("Reading {}/{}: {}", index + 1, total, path);
+            }
+
+            match AudioFile::new(path.clone()) {
+                Ok(audio) => {
+                    let metadata = audio.get_metadata()?;
+                    results.push(metadata);
+                }
+                Err(e) => {
+                    // Return error result as JSON string with error info
+                    let error_json = format!(r#"{{"error": "{}", "file": "{}"}}"#, e, path);
+                    results.push(error_json);
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Write metadata to multiple audio files
+    ///
+    /// Args:
+    ///     updates: List of tuples (file_path, metadata_json)
+    fn write_metadata_batch(&self, updates: Vec<(String, String)>) -> PyResult<Vec<BatchResult>> {
+        let mut results = Vec::new();
+        let total = updates.len();
+
+        for (index, (path, metadata_json)) in updates.iter().enumerate() {
+            if self.show_progress {
+                println!("Writing {}/{}: {}", index + 1, total, path);
+            }
+
+            match AudioFile::new(path.clone()) {
+                Ok(audio) => {
+                    match audio.set_metadata(metadata_json.clone()) {
+                        Ok(()) => {
+                            results.push(BatchResult::new(path.clone(), true, None));
+                        }
+                        Err(e) => {
+                            results.push(BatchResult::new(path.clone(), false, Some(e.to_string())));
+                        }
+                    }
+                }
+                Err(e) => {
+                    results.push(BatchResult::new(path.clone(), false, Some(e.to_string())));
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Copy metadata from one file to another
+    fn copy_metadata(&self, source_path: String, target_path: String) -> PyResult<()> {
+        let source = AudioFile::new(source_path)?;
+        let metadata_json = source.get_metadata()?;
+
+        let target = AudioFile::new(target_path)?;
+        target.set_metadata(metadata_json)?;
+
+        Ok(())
+    }
+
+    /// Process files in a directory matching a pattern
+    ///
+    /// Args:
+    ///     directory: Directory path to search
+    ///     pattern: Glob pattern (e.g., "*.mp3", "*.flac")
+    ///     operation: "read" or "write"
+    ///     metadata_json: Optional metadata JSON to write (required for "write" operation)
+    fn process_directory(
+        &self,
+        directory: String,
+        pattern: String,
+        operation: String,
+        metadata_json: Option<String>,
+        py: Python
+    ) -> PyResult<Py<PyAny>> {
+        let mut file_paths = Vec::new();
+
+        // Use std::path and glob for file matching
+        use std::path::Path;
+        let dir_path = Path::new(&directory);
+
+        if dir_path.is_dir() {
+            // Simple pattern matching - collect all files in directory
+            if let Ok(entries) = std::fs::read_dir(dir_path) {
+                for entry in entries.flatten() {
+                    if let Ok(file_type) = entry.file_type() {
+                        if file_type.is_file() {
+                            let path = entry.path();
+                            if let Some(ext) = path.extension() {
+                                let ext_str = ext.to_string_lossy();
+                                let pattern_clean = pattern.trim_start_matches("*.").to_lowercase();
+
+                                if ext_str.to_lowercase() == pattern_clean {
+                                    if let Some(path_str) = path.to_str() {
+                                        file_paths.push(path_str.to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        file_paths.sort();
+
+        match operation.as_str() {
+            "read" => {
+                let results = self.read_metadata_batch(file_paths)?;
+                // Convert Vec<String> to Python list
+                let py_list = PyList::new(py, results.iter().map(|s| s.as_str()))?;
+                Ok(py_list.into())
+            }
+            "write" => {
+                let metadata = metadata_json.ok_or_else(|| {
+                    pyo3::exceptions::PyValueError::new_err("metadata_json required for write operation")
+                })?;
+
+                let updates: Vec<(String, String)> = file_paths.into_iter()
+                    .map(|p| (p, metadata.clone()))
+                    .collect();
+
+                let results = self.write_metadata_batch(updates)?;
+                // Convert Vec<BatchResult> to Python list
+                let py_list = PyList::new(py, results)?;
+                Ok(py_list.into())
+            }
+            _ => Err(pyo3::exceptions::PyValueError::new_err(
+                "Invalid operation. Use 'read' or 'write'"
+            ))
+        }
+    }
+
+    fn __str__(&self) -> String {
+        "BatchProcessor(show_progress=true)".to_string()
+    }
+
     fn __repr__(&self) -> String {
         self.__str__()
     }

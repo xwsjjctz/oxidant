@@ -1,6 +1,6 @@
 # Oxidant
 
-一个高性能的音频元数据处理库，基于 Rust 编写，使用 PyO3 提供 Python 接口。支持 ID3 和 FLAC 格式音频文件的元数据读写。
+一个高性能的音频元数据处理库，基于 Rust 编写，使用 PyO3 提供 Python 接口。支持多种音频格式的元数据读写。
 
 ## 功能特性
 
@@ -8,18 +8,40 @@
 - ✅ 读取 ID3v2 标签（MP3 文件）
 - ✅ 读取 FLAC 元数据（Vorbis Comment）
 - ✅ 读取 OGG Vorbis 元数据（Vorbis Comment）
+- ✅ 读取 OPUS 元数据（OpusTags/Vorbis Comment）
+- ✅ 读取 MP4/M4A 元数据（iTunes 风格 atoms）
+- ✅ 读取 APE 元数据（APE Tags）
 - ✅ 写入 ID3v1 标签（MP3 文件）
 - ✅ 写入 ID3v2 标签（MP3 文件）
 - ✅ 写入 FLAC 元数据（Vorbis Comment）
 - ✅ 写入 OGG Vorbis 元数据（Vorbis Comment）
+- ✅ 写入 OPUS 元数据（OpusTags/Vorbis Comment）
 - ✅ 读取和写入封面图片（ID3v2 APIC、FLAC Picture）
-- ✅ 读取和写入歌词（ID3v2 USLT、FLAC LYRICS、OGG LYRICS）
+- ✅ 读取和写入歌词（ID3v2 USLT、FLAC LYRICS、OGG LYRICS、OPUS LYRICS）
 - ✅ 自动检测音频文件格式
+- ✅ 批量处理多个音频文件
 - 🚀 高性能 Rust 实现
 - 🐍 简单易用的 Python API
 - 📦 JSON 格式的元数据交换
 - 🔧 统一的元数据字段映射系统
-- 📋 多格式框架支持（OPUS、MP4、APE 基础框架已实现）
+
+## 支持的格式
+
+### 完整支持（读写）
+
+| 格式 | 扩展名 | 元数据格式 | 说明 |
+|------|--------|-----------|------|
+| **MP3** | .mp3 | ID3v1, ID3v2 | 完整的读写支持 |
+| **FLAC** | .flac | Vorbis Comment, Picture | 完整的读写支持 |
+| **OGG Vorbis** | .ogg | Vorbis Comment | 完整的读写支持 |
+| **OPUS** | .opus | OpusTags (Vorbis Comment) | 完整的读写支持 |
+
+### 只读支持
+
+| 格式 | 扩展名 | 元数据格式 | 说明 |
+|------|--------|-----------|------|
+| **MP4/M4A** | .mp4, .m4a | iTunes atoms | 读取支持，写入待实现 |
+| **APE** | .ape | APE Tags | 读取支持，写入待实现 |
 
 ## 安装
 
@@ -365,6 +387,115 @@ audio_file.set_metadata('{"cover": null}')
 
 ### 批量处理音频文件
 
+Oxidant 0.4.0+ 提供了专用的 `BatchProcessor` 类用于批量处理音频文件：
+
+```python
+import oxidant
+import json
+
+# 创建批量处理器
+processor = oxidant.BatchProcessor()
+processor.show_progress = True  # 显示处理进度
+
+# 方式一：批量读取元数据
+file_paths = ["song1.mp3", "song2.flac", "song3.ogg"]
+metadata_list = processor.read_metadata_batch(file_paths)
+
+for metadata_json in metadata_list:
+    metadata = json.loads(metadata_json)
+    print(f"标题: {metadata.get('title')}, 艺术家: {metadata.get('artist')}")
+
+# 方式二：批量写入元数据
+updates = [
+    ("song1.mp3", json.dumps({"artist": "Artist A"})),
+    ("song2.flac", json.dumps({"artist": "Artist B"})),
+    ("song3.ogg", json.dumps({"artist": "Artist C"})),
+]
+results = processor.write_metadata_batch(updates)
+
+for result in results:
+    if result.success:
+        print(f"✓ {result.file_path}")
+    else:
+        print(f"✗ {result.file_path}: {result.error_message}")
+
+# 方式三：处理整个目录
+# 读取目录中所有 FLAC 文件的元数据
+flac_metadata = processor.process_directory(
+    directory="./music",
+    pattern="*.flac",
+    operation="read"
+)
+
+# 批量更新目录中所有 MP3 文件的元数据
+mp3_results = processor.process_directory(
+    directory="./music",
+    pattern="*.mp3",
+    operation="write",
+    metadata_json=json.dumps({"artist": "统一艺术家名称", "year": "2024"})
+)
+
+# 方式四：复制元数据
+processor.copy_metadata("source.mp3", "target.flac")
+print("元数据已复制")
+```
+
+### BatchProcessor 类
+
+#### 属性
+
+- `show_progress` (bool): 是否显示处理进度信息（默认: True）
+
+#### 方法
+
+##### `read_metadata_batch(file_paths: List[str]) -> List[str]`
+
+批量读取多个音频文件的元数据。
+
+**参数:**
+- `file_paths`: 文件路径列表
+
+**返回:**
+- `List[str]`: JSON 格式的元数据字符串列表
+
+##### `write_metadata_batch(updates: List[Tuple[str, str]]) -> List[BatchResult]`
+
+批量写入元数据到多个音频文件。
+
+**参数:**
+- `updates`: 元组列表，每个元组包含 (file_path, metadata_json)
+
+**返回:**
+- `List[BatchResult]`: 处理结果列表
+
+##### `process_directory(directory: str, pattern: str, operation: str, metadata_json: Optional[str] = None)`
+
+处理目录中匹配指定模式的所有文件。
+
+**参数:**
+- `directory`: 目录路径
+- `pattern`: 文件模式（如 "*.mp3", "*.flac"）
+- `operation`: 操作类型 ("read" 或 "write")
+- `metadata_json`: 要写入的元数据 JSON（write 操作时必需）
+
+**返回:**
+- 读取操作返回元数据列表，写入操作返回 `BatchResult` 列表
+
+##### `copy_metadata(source_path: str, target_path: str)`
+
+将源文件的元数据复制到目标文件。
+
+#### BatchResult 类
+
+批量处理的结果对象。
+
+**属性:**
+- `file_path` (str): 文件路径
+- `success` (bool): 是否成功
+- `error_message` (str?): 错误信息（如果失败）
+
+### 旧式批量处理（兼容代码）
+
 ```python
 import oxidant
 import json
@@ -486,6 +617,16 @@ oxidant/
 │   │   ├── metadata.rs     # 元数据块
 │   │   ├── vorbis.rs       # Vorbis Comment
 │   │   └── picture.rs      # 图片块
+│   ├── ogg/                # OGG 容器处理
+│   │   ├── mod.rs
+│   │   ├── page.rs         # OGG 页面结构
+│   │   └── vorbis.rs       # OGG Vorbis Comment
+│   ├── opus/               # OPUS 格式处理
+│   │   └── mod.rs          # OPUS 实现
+│   ├── mp4/                # MP4/M4A 格式处理
+│   │   └── mod.rs          # iTunes atoms 实现
+│   ├── ape/                # APE 格式处理
+│   │   └── mod.rs          # APE Tags 实现
 │   └── utils/              # 工具函数
 │       ├── mod.rs
 │       ├── encoding.rs     # 编码转换
@@ -530,16 +671,14 @@ A: JSON 格式提供了以下优势：
 ### Q: 支持哪些音频格式？
 
 A: 目前支持：
-- **MP3**（ID3v1 和 ID3v2 标签）- 完整支持
-- **FLAC**（Vorbis Comment）- 完整支持
-- **OGG Vorbis**（Vorbis Comment）- 完整支持
-
-基础框架已实现，待完整功能：
-- **OPUS**（OGG 容器 + Vorbis Comment）
-- **MP4/M4A**（iTunes 风格原子）
-- **APE**（APE 标签）
-
-计划逐步完成这些格式的完整实现。
+- **完整支持（读写）**:
+  - **MP3**（ID3v1 和 ID3v2 标签）
+  - **FLAC**（Vorbis Comment、Picture）
+  - **OGG Vorbis**（Vorbis Comment）
+  - **OPUS**（OpusTags/Vorbis Comment）
+- **只读支持**:
+  - **MP4/M4A**（iTunes 风格 atoms）
+  - **APE**（APE Tags）
 
 ### Q: 封面图片数据为什么使用 Base64 编码？
 
