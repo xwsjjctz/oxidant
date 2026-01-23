@@ -6,10 +6,12 @@ use serde::{Serialize, Deserialize, Serializer};
 
 mod id3;
 mod flac;
+mod ogg;
 mod utils;
 
 use id3::{Id3v1Tag, Id3v2Tag};
 use flac::{FlacMetadataBlock, FlacMetadataBlockType, FLAC_SIGNATURE, VorbisFields, FlacPicture};
+use ogg::{OGG_SIGNATURE, vorbis::OggVorbisFile};
 
 /// Custom serialization for Vec<u8> to base64 string
 fn serialize_as_base64<S>(data: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
@@ -51,12 +53,13 @@ pub struct AudioFile {
 
 // Private implementation block for internal methods
 impl AudioFile {
-    /// Read metadata from the audio file
-    fn read_metadata(&self) -> PyResult<Metadata> {
+    /// Read metadata from the audio file (internal method)
+    fn read_metadata_internal(&self) -> PyResult<Metadata> {
         match self.file_type.as_str() {
             "id3v2" => self.read_id3v2_metadata(),
             "id3v1" => self.read_id3v1_metadata(),
             "flac" => self.read_flac_metadata(),
+            "ogg" => self.read_ogg_metadata(),
             _ => Ok(Metadata::default()),
         }
     }
@@ -80,6 +83,15 @@ impl AudioFile {
         if reader.read_exact(&mut flac_signature).is_ok() {
             if &flac_signature == FLAC_SIGNATURE {
                 return Ok("flac".to_string());
+            }
+        }
+
+        // Check for OGG
+        reader.seek(std::io::SeekFrom::Start(0))?;
+        let mut ogg_signature = [0u8; 4];
+        if reader.read_exact(&mut ogg_signature).is_ok() {
+            if &ogg_signature == OGG_SIGNATURE {
+                return Ok("ogg".to_string());
             }
         }
 
@@ -189,6 +201,30 @@ impl AudioFile {
                                 }        }
 
         Ok(metadata)
+    }
+
+    /// Read OGG Vorbis metadata
+    fn read_ogg_metadata(&self) -> PyResult<Metadata> {
+        let ogg_file = OggVorbisFile::new(self.path.clone());
+
+        match ogg_file.read_comment() {
+            Ok(Some(vorbis)) => {
+                let mut metadata = Metadata::default();
+                metadata.file_type = "OGG".to_string();
+                metadata.version = "Vorbis".to_string();
+                metadata.title = vorbis.get(VorbisFields::TITLE).cloned();
+                metadata.artist = vorbis.get(VorbisFields::ARTIST).cloned();
+                metadata.album = vorbis.get(VorbisFields::ALBUM).cloned();
+                metadata.year = vorbis.get(VorbisFields::DATE).cloned();
+                metadata.track = vorbis.get(VorbisFields::TRACKNUMBER).cloned();
+                metadata.genre = vorbis.get(VorbisFields::GENRE).cloned();
+                metadata.comment = vorbis.get(VorbisFields::COMMENT).cloned();
+                metadata.lyrics = vorbis.get(VorbisFields::LYRICS).cloned();
+                Ok(metadata)
+            }
+            Ok(None) => Ok(Metadata::default()),
+            Err(e) => Err(pyo3::exceptions::PyIOError::new_err(e.to_string())),
+        }
     }
 
     /// Decode text frame data
@@ -746,6 +782,711 @@ impl AudioFile {
 
         Ok(())
     }
+
+    /// Write OGG Vorbis metadata
+    fn write_ogg_metadata(&self, metadata: Metadata) -> PyResult<()> {
+        let ogg_file = OggVorbisFile::new(self.path.clone());
+
+        // Read existing comment
+        let mut vorbis = match ogg_file.read_comment() {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                // Create new comment
+                flac::VorbisComment::default()
+            }
+            Err(e) => return Err(pyo3::exceptions::PyIOError::new_err(e.to_string())),
+        };
+
+        // Update all fields
+        if let Some(title) = &metadata.title {
+            vorbis.set(flac::VorbisFields::TITLE, title);
+        }
+        if let Some(artist) = &metadata.artist {
+            vorbis.set(flac::VorbisFields::ARTIST, artist);
+        }
+        if let Some(album) = &metadata.album {
+            vorbis.set(flac::VorbisFields::ALBUM, album);
+        }
+        if let Some(year) = &metadata.year {
+            vorbis.set(flac::VorbisFields::DATE, year);
+        }
+        if let Some(track) = &metadata.track {
+            vorbis.set(flac::VorbisFields::TRACKNUMBER, track);
+        }
+        if let Some(genre) = &metadata.genre {
+            vorbis.set(flac::VorbisFields::GENRE, genre);
+        }
+        if let Some(comment) = &metadata.comment {
+            vorbis.set(flac::VorbisFields::COMMENT, comment);
+        }
+        if let Some(lyrics) = &metadata.lyrics {
+            vorbis.set(flac::VorbisFields::LYRICS, lyrics);
+        } else {
+            // Remove lyrics if None
+            vorbis.remove(flac::VorbisFields::LYRICS);
+        }
+
+        // Write back to file
+        ogg_file.write_comment(&vorbis)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+        Ok(())
+    }
+
+    // ============== Old Interface Support Methods ==============
+
+    /// Set cover art for FLAC file from image path (old interface)
+    fn set_flac_cover_from_path(&self, image_path: String, mime_type: String, description: String) -> PyResult<()> {
+        // Read image data
+        let image_data = std::fs::read(&image_path)?;
+
+        // Create new picture
+        let new_picture = flac::FlacPicture::new(image_data, mime_type, description);
+        let picture_data = new_picture.to_bytes();
+
+        // Read the whole file
+        let mut file_data = std::fs::read(&self.path)?;
+
+        // Find and replace the first PICTURE block
+        let mut pos = 4; // Skip FLAC signature
+        let mut found_picture = false;
+
+        while pos < file_data.len() {
+            if pos + 4 > file_data.len() {
+                break;
+            }
+
+            // Read block header
+            let is_last = (file_data[pos] & 0x80) != 0;
+            let block_type = file_data[pos] & 0x7F;
+
+            if block_type == 6 { // Picture block type
+                // Read block length
+                let block_length = (((file_data[pos + 1] as u32) << 16) |
+                                  ((file_data[pos + 2] as u32) << 8) |
+                                  (file_data[pos + 3] as u32)) as usize;
+
+                let header_size = 4;
+                let total_size = header_size + block_length;
+                let new_block_length = picture_data.len();
+
+                // Create new block header
+                let mut new_header = [0u8; 4];
+                new_header[0] = if is_last { 0x80 | 6 } else { 6 };
+                new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
+                new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
+                new_header[3] = (new_block_length & 0xFF) as u8;
+
+                // Replace the block
+                let mut new_file_data = Vec::new();
+                new_file_data.extend_from_slice(&file_data[..pos]);
+                new_file_data.extend_from_slice(&new_header);
+                new_file_data.extend_from_slice(&picture_data);
+                new_file_data.extend_from_slice(&file_data[pos + total_size..]);
+
+                file_data = new_file_data;
+                found_picture = true;
+                break;
+            } else {
+                // Move to next block
+                let block_length: usize = (((file_data[pos + 1] as u32) << 16) |
+                                          ((file_data[pos + 2] as u32) << 8) |
+                                          (file_data[pos + 3] as u32)) as usize;
+                pos += 4 + block_length;
+
+                if is_last {
+                    break;
+                }
+            }
+        }
+
+        // If no picture block found, insert a new one before the audio data
+        if !found_picture {
+            // Find the position before audio data (after last metadata block)
+            let insert_pos = pos;
+
+            // Create new picture block
+            let mut new_header = [0u8; 4];
+            let new_block_length = picture_data.len();
+            new_header[0] = 0x80 | 6; // Last block + Picture type
+            new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
+            new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
+            new_header[3] = (new_block_length & 0xFF) as u8;
+
+            // Update the previous block's last flag
+            if insert_pos > 4 {
+                file_data[insert_pos - 4] &= 0x7F; // Clear last flag
+            }
+
+            // Insert new block
+            let mut new_file_data = Vec::new();
+            new_file_data.extend_from_slice(&file_data[..insert_pos]);
+            new_file_data.extend_from_slice(&new_header);
+            new_file_data.extend_from_slice(&picture_data);
+            new_file_data.extend_from_slice(&file_data[insert_pos..]);
+
+            file_data = new_file_data;
+        }
+
+        // Write modified file
+        std::fs::write(&self.path, file_data)?;
+
+        Ok(())
+    }
+
+    /// Set cover art for ID3v2 file from image path (old interface)
+    fn set_id3v2_cover_from_path(&self, image_path: String, mime_type: String, description: String) -> PyResult<()> {
+        use id3::frames::{encode_apic_frame, PictureType};
+
+        // Read image data
+        let image_data = std::fs::read(&image_path)?;
+
+        // Create APIC frame
+        let apic_data = encode_apic_frame(&mime_type, PictureType::CoverFront, &description, &image_data);
+
+        // Read the whole file
+        let mut file_data = std::fs::read(&self.path)?;
+
+        // Check for ID3v2 tag
+        if file_data.len() < 10 || &file_data[0..3] != b"ID3" {
+            return Err(pyo3::exceptions::PyValueError::new_err("Not a valid ID3v2 file"));
+        }
+
+        // Get ID3v2 header info
+        let version = (file_data[3], file_data[4]);
+        let tag_size: usize = (((file_data[6] as u32) << 21) |
+                      ((file_data[7] as u32) << 14) |
+                      ((file_data[8] as u32) << 7) |
+                      (file_data[9] as u32)) as usize;
+
+        let header_size: usize = 10;
+        let tag_end: usize = header_size + tag_size;
+
+        // Find and replace existing APIC frames
+        let mut pos: usize = header_size;
+        let mut frames_before_apic: Vec<(String, Vec<u8>)> = Vec::new();
+
+        while pos < tag_end {
+            if pos + 10 > file_data.len() {
+                break;
+            }
+
+            // Read frame header
+            let frame_id = String::from_utf8_lossy(&file_data[pos..pos + 4]).to_string();
+
+            // Check for padding (all zeros)
+            if frame_id.chars().all(|c| c == '\0') {
+                // Padding found, stop reading frames
+                break;
+            }
+
+            // Read frame size
+            let frame_size: usize = if version.0 >= 4 {
+                // ID3v2.4 uses synchsafe integers
+                (((file_data[pos + 4] as u32) << 21) |
+                ((file_data[pos + 5] as u32) << 14) |
+                ((file_data[pos + 6] as u32) << 7) |
+                (file_data[pos + 7] as u32)) as usize
+            } else {
+                // ID3v2.3 uses regular integers
+                (((file_data[pos + 4] as u32) << 24) |
+                ((file_data[pos + 5] as u32) << 16) |
+                ((file_data[pos + 6] as u32) << 8) |
+                (file_data[pos + 7] as u32)) as usize
+            };
+
+            let frame_header_size: usize = 10;
+            let frame_end = pos + frame_header_size + frame_size;
+
+            if frame_end > file_data.len() {
+                break;
+            }
+
+            let frame_data = file_data[pos + frame_header_size..frame_end].to_vec();
+
+            if frame_id != "APIC" {
+                frames_before_apic.push((frame_id, frame_data));
+            }
+
+            pos += frame_header_size + frame_size;
+        }
+
+        // Create new APIC frame
+        let new_apic_frame = create_id3v2_frame("APIC", &apic_data, version.0);
+
+        // Build new tag data
+        let mut new_tag_data = Vec::new();
+
+        // Add frames before APIC
+        for (frame_id, frame_data) in frames_before_apic {
+            new_tag_data.extend_from_slice(&create_id3v2_frame(&frame_id, &frame_data, version.0));
+        }
+
+        // Add new APIC frame
+        new_tag_data.extend_from_slice(&new_apic_frame);
+
+        // Update ID3v2 header with new size
+        let new_tag_size = new_tag_data.len();
+        let synchsafe_size = to_synchsafe(new_tag_size);
+
+        file_data[6] = ((synchsafe_size >> 21) & 0x7F) as u8;
+        file_data[7] = ((synchsafe_size >> 14) & 0x7F) as u8;
+        file_data[8] = ((synchsafe_size >> 7) & 0x7F) as u8;
+        file_data[9] = (synchsafe_size & 0x7F) as u8;
+
+        // Build new file data
+        let mut new_file_data = Vec::new();
+        new_file_data.extend_from_slice(&file_data[..header_size]);
+        new_file_data.extend_from_slice(&new_tag_data);
+        new_file_data.extend_from_slice(&file_data[tag_end..]);
+
+        // Write modified file
+        std::fs::write(&self.path, new_file_data)?;
+
+        Ok(())
+    }
+
+    /// Set lyrics for FLAC file (old interface direct method)
+    fn set_flac_lyrics_direct(&self, lyrics: String) -> PyResult<()> {
+        // Read the whole file
+        let mut file_data = std::fs::read(&self.path)?;
+
+        // Find Vorbis Comment block
+        let mut pos = 4; // Skip FLAC signature
+        let mut found_vorbis = false;
+
+        while pos < file_data.len() {
+            if pos + 4 > file_data.len() {
+                break;
+            }
+
+            // Read block header
+            let is_last = (file_data[pos] & 0x80) != 0;
+            let block_type = file_data[pos] & 0x7F;
+
+            if block_type == 4 { // Vorbis Comment block type
+                // Read block length
+                let block_length = (((file_data[pos + 1] as u32) << 16) |
+                                  ((file_data[pos + 2] as u32) << 8) |
+                                  (file_data[pos + 3] as u32)) as usize;
+
+                let header_size = 4;
+                let total_size = header_size + block_length;
+
+                // Read existing Vorbis comment
+                let vorbis_data = &file_data[pos + header_size..pos + total_size];
+                if let Ok(mut vorbis) = flac::VorbisComment::read(&mut std::io::Cursor::new(vorbis_data)) {
+                    // Set lyrics
+                    vorbis.set(flac::VorbisFields::LYRICS, &lyrics);
+                    let new_vorbis_data = vorbis.to_bytes();
+
+                    // Update block
+                    let new_block_length = new_vorbis_data.len();
+                    let mut new_header = [0u8; 4];
+                    new_header[0] = if is_last { 0x80 | 4 } else { 4 };
+                    new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
+                    new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
+                    new_header[3] = (new_block_length & 0xFF) as u8;
+
+                    // Replace the block
+                    let mut new_file_data = Vec::new();
+                    new_file_data.extend_from_slice(&file_data[..pos]);
+                    new_file_data.extend_from_slice(&new_header);
+                    new_file_data.extend_from_slice(&new_vorbis_data);
+                    new_file_data.extend_from_slice(&file_data[pos + total_size..]);
+
+                    file_data = new_file_data;
+                    found_vorbis = true;
+                    break;
+                }
+            } else {
+                // Move to next block
+                let block_length: usize = (((file_data[pos + 1] as u32) << 16) |
+                                          ((file_data[pos + 2] as u32) << 8) |
+                                          (file_data[pos + 3] as u32)) as usize;
+                pos += 4 + block_length;
+
+                if is_last {
+                    break;
+                }
+            }
+        }
+
+        if !found_vorbis {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "No Vorbis Comment block found in FLAC file"
+            ));
+        }
+
+        // Write modified file
+        std::fs::write(&self.path, file_data)?;
+
+        Ok(())
+    }
+
+    /// Set lyrics for ID3v2 file (old interface direct method)
+    fn set_id3v2_lyrics_direct(&self, lyrics: String) -> PyResult<()> {
+        use id3::frames::encode_uslt_frame;
+
+        // Create USLT frame (language: "eng", description: "")
+        let uslt_data = encode_uslt_frame("eng", "", &lyrics);
+
+        // Read the whole file
+        let mut file_data = std::fs::read(&self.path)?;
+
+        // Check for ID3v2 tag
+        if file_data.len() < 10 || &file_data[0..3] != b"ID3" {
+            return Err(pyo3::exceptions::PyValueError::new_err("Not a valid ID3v2 file"));
+        }
+
+        // Get ID3v2 header info
+        let version = (file_data[3], file_data[4]);
+        let tag_size: usize = (((file_data[6] as u32) << 21) |
+                      ((file_data[7] as u32) << 14) |
+                      ((file_data[8] as u32) << 7) |
+                      (file_data[9] as u32)) as usize;
+
+        let header_size: usize = 10;
+        let tag_end: usize = header_size + tag_size;
+
+        // Find and replace existing USLT frames
+        let mut pos: usize = header_size;
+        let mut frames_before_uslt: Vec<(String, Vec<u8>)> = Vec::new();
+
+        while pos < tag_end {
+            if pos + 10 > file_data.len() {
+                break;
+            }
+
+            // Read frame header
+            let frame_id = String::from_utf8_lossy(&file_data[pos..pos + 4]).to_string();
+
+            // Check for padding (all zeros)
+            if frame_id.chars().all(|c| c == '\0') {
+                // Padding found, stop reading frames
+                break;
+            }
+
+            // Read frame size
+            let frame_size: usize = if version.0 >= 4 {
+                // ID3v2.4 uses synchsafe integers
+                (((file_data[pos + 4] as u32) << 21) |
+                ((file_data[pos + 5] as u32) << 14) |
+                ((file_data[pos + 6] as u32) << 7) |
+                (file_data[pos + 7] as u32)) as usize
+            } else {
+                // ID3v2.3 uses regular integers
+                (((file_data[pos + 4] as u32) << 24) |
+                ((file_data[pos + 5] as u32) << 16) |
+                ((file_data[pos + 6] as u32) << 8) |
+                (file_data[pos + 7] as u32)) as usize
+            };
+
+            let frame_header_size: usize = 10;
+            let frame_end = pos + frame_header_size + frame_size;
+
+            if frame_end > file_data.len() {
+                break;
+            }
+
+            let frame_data = file_data[pos + frame_header_size..frame_end].to_vec();
+
+            if frame_id != "USLT" {
+                frames_before_uslt.push((frame_id, frame_data));
+            }
+
+            pos += frame_header_size + frame_size;
+        }
+
+        // Create new USLT frame
+        let new_uslt_frame = create_id3v2_frame("USLT", &uslt_data, version.0);
+
+        // Build new tag data
+        let mut new_tag_data = Vec::new();
+
+        // Add frames before USLT
+        for (frame_id, frame_data) in frames_before_uslt {
+            new_tag_data.extend_from_slice(&create_id3v2_frame(&frame_id, &frame_data, version.0));
+        }
+
+        // Add new USLT frame
+        new_tag_data.extend_from_slice(&new_uslt_frame);
+
+        // Update ID3v2 header with new size
+        let new_tag_size = new_tag_data.len();
+        let synchsafe_size = to_synchsafe(new_tag_size);
+
+        file_data[6] = ((synchsafe_size >> 21) & 0x7F) as u8;
+        file_data[7] = ((synchsafe_size >> 14) & 0x7F) as u8;
+        file_data[8] = ((synchsafe_size >> 7) & 0x7F) as u8;
+        file_data[9] = (synchsafe_size & 0x7F) as u8;
+
+        // Build new file data
+        let mut new_file_data = Vec::new();
+        new_file_data.extend_from_slice(&file_data[..header_size]);
+        new_file_data.extend_from_slice(&new_tag_data);
+        new_file_data.extend_from_slice(&file_data[tag_end..]);
+
+        // Write modified file
+        std::fs::write(&self.path, new_file_data)?;
+
+        Ok(())
+    }
+
+    /// Remove lyrics from FLAC file (old interface direct method)
+    fn remove_flac_lyrics_direct(&self) -> PyResult<()> {
+        // Read the whole file
+        let mut file_data = std::fs::read(&self.path)?;
+
+        // Find Vorbis Comment block
+        let mut pos = 4; // Skip FLAC signature
+        let mut found_vorbis = false;
+
+        while pos < file_data.len() {
+            if pos + 4 > file_data.len() {
+                break;
+            }
+
+            // Read block header
+            let is_last = (file_data[pos] & 0x80) != 0;
+            let block_type = file_data[pos] & 0x7F;
+
+            if block_type == 4 { // Vorbis Comment block type
+                // Read block length
+                let block_length = (((file_data[pos + 1] as u32) << 16) |
+                                  ((file_data[pos + 2] as u32) << 8) |
+                                  (file_data[pos + 3] as u32)) as usize;
+
+                let header_size = 4;
+                let total_size = header_size + block_length;
+
+                // Read existing Vorbis comment
+                let vorbis_data = &file_data[pos + header_size..pos + total_size];
+                if let Ok(mut vorbis) = flac::VorbisComment::read(&mut std::io::Cursor::new(vorbis_data)) {
+                    // Remove lyrics
+                    vorbis.remove(flac::VorbisFields::LYRICS);
+                    let new_vorbis_data = vorbis.to_bytes();
+
+                    // Update block
+                    let new_block_length = new_vorbis_data.len();
+                    let mut new_header = [0u8; 4];
+                    new_header[0] = if is_last { 0x80 | 4 } else { 4 };
+                    new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
+                    new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
+                    new_header[3] = (new_block_length & 0xFF) as u8;
+
+                    // Replace the block
+                    let mut new_file_data = Vec::new();
+                    new_file_data.extend_from_slice(&file_data[..pos]);
+                    new_file_data.extend_from_slice(&new_header);
+                    new_file_data.extend_from_slice(&new_vorbis_data);
+                    new_file_data.extend_from_slice(&file_data[pos + total_size..]);
+
+                    file_data = new_file_data;
+                    found_vorbis = true;
+                    break;
+                }
+            } else {
+                // Move to next block
+                let block_length: usize = (((file_data[pos + 1] as u32) << 16) |
+                                          ((file_data[pos + 2] as u32) << 8) |
+                                          (file_data[pos + 3] as u32)) as usize;
+                pos += 4 + block_length;
+
+                if is_last {
+                    break;
+                }
+            }
+        }
+
+        if !found_vorbis {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "No Vorbis Comment block found in FLAC file"
+            ));
+        }
+
+        // Write modified file
+        std::fs::write(&self.path, file_data)?;
+
+        Ok(())
+    }
+
+    /// Remove lyrics from ID3v2 file (old interface direct method)
+    fn remove_id3v2_lyrics_direct(&self) -> PyResult<()> {
+        // Read the whole file
+        let mut file_data = std::fs::read(&self.path)?;
+
+        // Check for ID3v2 tag
+        if file_data.len() < 10 || &file_data[0..3] != b"ID3" {
+            return Err(pyo3::exceptions::PyValueError::new_err("Not a valid ID3v2 file"));
+        }
+
+        // Get ID3v2 header info
+        let version = (file_data[3], file_data[4]);
+        let tag_size: usize = (((file_data[6] as u32) << 21) |
+                      ((file_data[7] as u32) << 14) |
+                      ((file_data[8] as u32) << 7) |
+                      (file_data[9] as u32)) as usize;
+
+        let header_size: usize = 10;
+        let tag_end: usize = header_size + tag_size;
+
+        // Find and remove existing USLT frames
+        let mut pos: usize = header_size;
+        let mut frames: Vec<(String, Vec<u8>)> = Vec::new();
+
+        while pos < tag_end {
+            if pos + 10 > file_data.len() {
+                break;
+            }
+
+            // Read frame header
+            let frame_id = String::from_utf8_lossy(&file_data[pos..pos + 4]).to_string();
+
+            // Check for padding (all zeros)
+            if frame_id.chars().all(|c| c == '\0') {
+                // Padding found, stop reading frames
+                break;
+            }
+
+            // Read frame size
+            let frame_size: usize = if version.0 >= 4 {
+                // ID3v2.4 uses synchsafe integers
+                (((file_data[pos + 4] as u32) << 21) |
+                ((file_data[pos + 5] as u32) << 14) |
+                ((file_data[pos + 6] as u32) << 7) |
+                (file_data[pos + 7] as u32)) as usize
+            } else {
+                // ID3v2.3 uses regular integers
+                (((file_data[pos + 4] as u32) << 24) |
+                ((file_data[pos + 5] as u32) << 16) |
+                ((file_data[pos + 6] as u32) << 8) |
+                (file_data[pos + 7] as u32)) as usize
+            };
+
+            let frame_header_size: usize = 10;
+            let frame_end = pos + frame_header_size + frame_size;
+
+            if frame_end > file_data.len() {
+                break;
+            }
+
+            let frame_data = file_data[pos + frame_header_size..frame_end].to_vec();
+
+            // Keep all frames except USLT
+            if frame_id != "USLT" {
+                frames.push((frame_id, frame_data));
+            }
+
+            pos += frame_header_size + frame_size;
+        }
+
+        // Build new tag data
+        let mut new_tag_data = Vec::new();
+
+        // Add all frames except USLT
+        for (frame_id, frame_data) in frames {
+            new_tag_data.extend_from_slice(&create_id3v2_frame(&frame_id, &frame_data, version.0));
+        }
+
+        // Update ID3v2 header with new size
+        let new_tag_size = new_tag_data.len();
+        let synchsafe_size = to_synchsafe(new_tag_size);
+
+        file_data[6] = ((synchsafe_size >> 21) & 0x7F) as u8;
+        file_data[7] = ((synchsafe_size >> 14) & 0x7F) as u8;
+        file_data[8] = ((synchsafe_size >> 7) & 0x7F) as u8;
+        file_data[9] = (synchsafe_size & 0x7F) as u8;
+
+        // Build new file data
+        let mut new_file_data = Vec::new();
+        new_file_data.extend_from_slice(&file_data[..header_size]);
+        new_file_data.extend_from_slice(&new_tag_data);
+        new_file_data.extend_from_slice(&file_data[tag_end..]);
+
+        // Write modified file
+        std::fs::write(&self.path, new_file_data)?;
+
+        Ok(())
+    }
+
+    /// Helper method to set a Vorbis comment field in FLAC file (old interface)
+    fn set_flac_vorbis_field(&self, field: &str, value: &str) -> PyResult<()> {
+        // Read the whole file
+        let mut file_data = std::fs::read(&self.path)?;
+
+        // Find Vorbis Comment block
+        let mut pos = 4; // Skip FLAC signature
+        let mut found_vorbis = false;
+
+        while pos < file_data.len() {
+            if pos + 4 > file_data.len() {
+                break;
+            }
+
+            // Read block header
+            let is_last = (file_data[pos] & 0x80) != 0;
+            let block_type = file_data[pos] & 0x7F;
+
+            if block_type == 4 { // Vorbis Comment block type
+                // Read block length
+                let block_length = (((file_data[pos + 1] as u32) << 16) |
+                                  ((file_data[pos + 2] as u32) << 8) |
+                                  (file_data[pos + 3] as u32)) as usize;
+
+                let header_size = 4;
+                let total_size = header_size + block_length;
+
+                // Read existing Vorbis comment
+                let vorbis_data = &file_data[pos + header_size..pos + total_size];
+                if let Ok(mut vorbis) = flac::VorbisComment::read(&mut std::io::Cursor::new(vorbis_data)) {
+                    // Set the field
+                    vorbis.set(field, value);
+                    let new_vorbis_data = vorbis.to_bytes();
+
+                    // Update block
+                    let new_block_length = new_vorbis_data.len();
+                    let mut new_header = [0u8; 4];
+                    new_header[0] = if is_last { 0x80 | 4 } else { 4 };
+                    new_header[1] = ((new_block_length >> 16) & 0xFF) as u8;
+                    new_header[2] = ((new_block_length >> 8) & 0xFF) as u8;
+                    new_header[3] = (new_block_length & 0xFF) as u8;
+
+                    // Replace the block
+                    let mut new_file_data = Vec::new();
+                    new_file_data.extend_from_slice(&file_data[..pos]);
+                    new_file_data.extend_from_slice(&new_header);
+                    new_file_data.extend_from_slice(&new_vorbis_data);
+                    new_file_data.extend_from_slice(&file_data[pos + total_size..]);
+
+                    file_data = new_file_data;
+                    found_vorbis = true;
+                    break;
+                }
+            } else {
+                // Move to next block
+                let block_length: usize = (((file_data[pos + 1] as u32) << 16) |
+                                          ((file_data[pos + 2] as u32) << 8) |
+                                          (file_data[pos + 3] as u32)) as usize;
+                pos += 4 + block_length;
+
+                if is_last {
+                    break;
+                }
+            }
+        }
+
+        if !found_vorbis {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "No Vorbis Comment block found in FLAC file"
+            ));
+        }
+
+        // Write modified file
+        std::fs::write(&self.path, file_data)?;
+
+        Ok(())
+    }
 }
 
 /// Public Python methods
@@ -758,9 +1499,11 @@ impl AudioFile {
         Ok(AudioFile { path, file_type })
     }
 
+    // ============== New Interface (JSON-based) ==============
+
     /// Get all metadata as JSON string
     fn get_metadata(&self) -> PyResult<String> {
-        let mut metadata = self.read_metadata()?;
+        let mut metadata = self.read_metadata_internal()?;
 
         // Read cover art if available
         if let Ok(Some(cover)) = self.read_cover() {
@@ -774,7 +1517,7 @@ impl AudioFile {
     /// Set metadata from JSON string
     fn set_metadata(&self, json_str: String) -> PyResult<()> {
         // Read existing metadata first to preserve file_type and version
-        let mut metadata = self.read_metadata()?;
+        let mut metadata = self.read_metadata_internal()?;
 
         // Parse JSON and update fields
         let updates: serde_json::Value = serde_json::from_str(&json_str)
@@ -827,10 +1570,108 @@ impl AudioFile {
             "id3v2" => self.write_id3v2_metadata(metadata),
             "id3v1" => self.write_id3v1_metadata(metadata),
             "flac" => self.write_flac_metadata(metadata),
+            "ogg" => self.write_ogg_metadata(metadata),
             _ => Err(pyo3::exceptions::PyValueError::new_err(
                 format!("Unsupported file type: {}", self.file_type)
             )),
         }
+    }
+
+    // ============== Old Interface (Direct methods) ==============
+
+    /// Read metadata from the audio file (returns Metadata object)
+    /// This is the old interface method for backward compatibility
+    fn read_metadata(&self) -> PyResult<Metadata> {
+        match self.file_type.as_str() {
+            "id3v2" => self.read_id3v2_metadata(),
+            "id3v1" => self.read_id3v1_metadata(),
+            "flac" => self.read_flac_metadata(),
+            _ => Ok(Metadata::default()),
+        }
+    }
+
+    /// Extract cover art from audio file (old interface)
+    fn extract_cover(&self) -> PyResult<Option<CoverArt>> {
+        self.read_cover()
+    }
+
+    /// Set cover art for audio file (old interface)
+    /// image_path: path to the image file
+    /// mime_type: MIME type of the image (e.g., "image/jpeg", "image/png")
+    /// description: description of the cover art
+    fn set_cover(&self, image_path: String, mime_type: String, description: String) -> PyResult<()> {
+        match self.file_type.as_str() {
+            "flac" => self.set_flac_cover_from_path(image_path, mime_type, description),
+            "id3v2" => self.set_id3v2_cover_from_path(image_path, mime_type, description),
+            _ => Err(pyo3::exceptions::PyValueError::new_err(
+                format!("File type {} does not support cover art modification", self.file_type)
+            )),
+        }
+    }
+
+    /// Get lyrics from audio file (old interface)
+    fn get_lyrics(&self) -> PyResult<Option<String>> {
+        let metadata = self.read_metadata_internal()?;
+        Ok(metadata.lyrics)
+    }
+
+    /// Set lyrics for audio file (old interface)
+    fn set_lyrics(&self, lyrics: String) -> PyResult<()> {
+        match self.file_type.as_str() {
+            "flac" => self.set_flac_lyrics_direct(lyrics),
+            "id3v2" => self.set_id3v2_lyrics_direct(lyrics),
+            _ => Err(pyo3::exceptions::PyValueError::new_err(
+                format!("File type {} does not support lyrics modification", self.file_type)
+            )),
+        }
+    }
+
+    /// Remove lyrics from audio file (old interface)
+    fn remove_lyrics(&self) -> PyResult<()> {
+        match self.file_type.as_str() {
+            "flac" => self.remove_flac_lyrics_direct(),
+            "id3v2" => self.remove_id3v2_lyrics_direct(),
+            _ => Err(pyo3::exceptions::PyValueError::new_err(
+                format!("File type {} does not support lyrics modification", self.file_type)
+            )),
+        }
+    }
+
+    // ============== FLAC-specific setters (old interface) ==============
+
+    /// Set title for FLAC file
+    fn set_flac_title(&self, title: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(flac::VorbisFields::TITLE, &title)
+    }
+
+    /// Set artist for FLAC file
+    fn set_flac_artist(&self, artist: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(flac::VorbisFields::ARTIST, &artist)
+    }
+
+    /// Set album for FLAC file
+    fn set_flac_album(&self, album: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(flac::VorbisFields::ALBUM, &album)
+    }
+
+    /// Set year for FLAC file
+    fn set_flac_year(&self, year: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(flac::VorbisFields::DATE, &year)
+    }
+
+    /// Set track number for FLAC file
+    fn set_flac_track(&self, track: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(flac::VorbisFields::TRACKNUMBER, &track)
+    }
+
+    /// Set genre for FLAC file
+    fn set_flac_genre(&self, genre: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(flac::VorbisFields::GENRE, &genre)
+    }
+
+    /// Set comment for FLAC file
+    fn set_flac_comment(&self, comment: String) -> PyResult<()> {
+        self.set_flac_vorbis_field(flac::VorbisFields::COMMENT, &comment)
     }
 }
 

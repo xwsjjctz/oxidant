@@ -7,15 +7,19 @@
 - ✅ 读取 ID3v1 标签（MP3 文件）
 - ✅ 读取 ID3v2 标签（MP3 文件）
 - ✅ 读取 FLAC 元数据（Vorbis Comment）
+- ✅ 读取 OGG Vorbis 元数据（Vorbis Comment）
 - ✅ 写入 ID3v1 标签（MP3 文件）
 - ✅ 写入 ID3v2 标签（MP3 文件）
 - ✅ 写入 FLAC 元数据（Vorbis Comment）
+- ✅ 写入 OGG Vorbis 元数据（Vorbis Comment）
 - ✅ 读取和写入封面图片（ID3v2 APIC、FLAC Picture）
-- ✅ 读取和写入歌词（ID3v2 USLT、FLAC LYRICS）
+- ✅ 读取和写入歌词（ID3v2 USLT、FLAC LYRICS、OGG LYRICS）
 - ✅ 自动检测音频文件格式
 - 🚀 高性能 Rust 实现
 - 🐍 简单易用的 Python API
 - 📦 JSON 格式的元数据交换
+- 🔧 统一的元数据字段映射系统
+- 📋 多格式框架支持（OPUS、MP4、APE 基础框架已实现）
 
 ## 安装
 
@@ -294,6 +298,43 @@ audio_file.set_metadata('{"cover": null}')
 - 封面图片块
 - 支持多种图片格式（JPEG, PNG 等）
 
+### OGG Vorbis
+
+**Vorbis Comment**
+- 使用与 FLAC 相同的 Vorbis Comment 格式
+- 位于第二个 OGG 页面（Comment Header）
+- 支持字段：TITLE, ARTIST, ALBUM, DATE, TRACKNUMBER, GENRE, COMMENT, LYRICS
+
+**OGG 容器**
+- 使用 OGG 页面结构封装
+- 自动识别 OGG 签名
+
+### 其他格式（基础框架已实现）
+
+**OPUS**
+- 基础框架已完成（`src/opus/mod.rs`）
+- 使用 OGG 容器 + Vorbis Comment
+- 待实现完整读写功能
+
+**MP4/M4A**
+- 基础框架已完成（`src/mp4/mod.rs`）
+- 使用 iTunes 风格原子（atom）结构
+- 支持字段：©nam, ©ART, ©alb, ©day, trkn, ©gen, ©cmt, ©lyr, covr
+- 待实现完整读写功能
+
+**APE**
+- 基础框架已完成（`src/ape/mod.rs`）
+- 使用 APE 标签格式
+- 支持字段：Title, Artist, Album, Year, Track, Genre, Comment, Lyrics
+- 待实现完整读写功能
+
+### 统一字段映射
+
+项目实现了统一的元数据字段映射系统（`src/field_mapping.rs`），支持：
+- 标准化字段名称（title, artist, album, year, track, genre, comment, lyrics, cover）
+- 各格式特定字段的自动转换
+- 格式特定的值处理（如年份规范化、曲目号解析）
+
 ## 元数据字段说明
 
 | 字段 | 类型 | 说明 |
@@ -491,10 +532,16 @@ A: JSON 格式提供了以下优势：
 ### Q: 支持哪些音频格式？
 
 A: 目前支持：
-- MP3（ID3v1 和 ID3v2 标签）
-- FLAC（Vorbis Comment）
+- **MP3**（ID3v1 和 ID3v2 标签）- 完整支持
+- **FLAC**（Vorbis Comment）- 完整支持
+- **OGG Vorbis**（Vorbis Comment）- 完整支持
 
-计划支持更多格式（如 APE、M4A 等）。
+基础框架已实现，待完整功能：
+- **OPUS**（OGG 容器 + Vorbis Comment）
+- **MP4/M4A**（iTunes 风格原子）
+- **APE**（APE 标签）
+
+计划逐步完成这些格式的完整实现。
 
 ### Q: 封面图片数据为什么使用 Base64 编码？
 
