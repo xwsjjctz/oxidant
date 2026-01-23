@@ -142,8 +142,6 @@ audio_file = oxidant.AudioFile("path/to/audio.flac")
 
 # 准备包含封面的元数据
 metadata_with_cover = {
-    "title": "歌曲标题",
-    "artist": "艺术家",
     "cover": {
         "mime_type": "image/jpeg",
         "width": 1000,
