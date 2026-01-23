@@ -31,29 +31,25 @@
 ## [0.3.0] - 2025-01-23 (开发中)
 
 ### 新增
+- **OPUS 格式完整支持**：完整的 OPUS 元数据读写
+  - 自动检测 OPUS 文件格式（基于 OGG 容器中的 OpusHead 标识）
+  - 支持 OpusTags (Vorbis Comment) 读写
+  - 与现有 API 完全兼容（JSON 和直接方法接口）
+- **MP4/M4A 格式读取支持**：MP4/M4A 元数据读取
+  - 自动检测 MP4/M4A 文件格式（基于 ftyp atom）
+  - 支持 iTunes 风格元数据读取（ilst atom）
+  - 支持常见字段：标题、艺术家、专辑、年份、曲目、流派、备注、歌词
+- **APE 格式读取支持**：APE 元数据读取
+  - 自动检测 APE 文件格式（基于 APETAGEX 标识）
+  - 支持 APE Tag 读取
+  - 支持常见字段：标题、艺术家、专辑、年份、曲目、流派、备注、歌词
 - **OGG Vorbis 格式支持**：完整的 OGG Vorbis 元数据读写
   - 自动检测 OGG 文件格式
   - 支持 Vorbis Comment 读写
   - 与现有 API 完全兼容（JSON 和直接方法接口）
-- **OPUS 格式基础框架**：创建 OPUS 模块结构
-  - 定义 OPUS 文件格式规范
-  - 预留接口供后续实现
-- **MP4/M4A 格式基础框架**：创建 MP4 模块结构
-  - 定义 iTunes 风格元数据规范
-  - 定义原子（atom）结构常量
-  - 预留接口供后续实现
-- **APE 格式基础框架**：创建 APE 模块结构
-  - 定义 APE 标签格式规范
-  - 定义 APE 标签头部结构
-  - 预留接口供后续实现
-- **统一的元数据字段映射系统**：实现跨格式的字段标准化
-  - `StandardField` 枚举定义标准字段
-  - `FieldMappings` 提供各格式字段映射
-  - `ValueConverter` 处理格式特定的值转换
-  - 支持字段名自动识别和转换
 
 ### 改进
-- 扩展文件类型检测，支持 OGG 格式
+- 扩展文件类型检测，支持 OPUS、MP4/M4A、APE 格式
 - 优化元数据读写架构，便于添加新格式
 - 改进代码组织，使用模块化设计
 - **清理编译警告**：消除所有未使用的导入和变量警告
@@ -67,15 +63,25 @@
   - `mod.rs` - 模块导出和常量定义
   - `page.rs` - OGG 页面结构解析
   - `vorbis.rs` - OGG Vorbis Comment 读写
-- 新增 `src/opus/mod.rs` - OPUS 格式框架（待实现）
-- 新增 `src/mp4/mod.rs` - MP4/M4A 格式框架（待实现）
-- 新增 `src/ape/mod.rs` - APE 格式框架（待实现）
-- 新增 `src/field_mapping.rs` - 统一字段映射系统
+- 新增 `src/opus/mod.rs` - OPUS 格式完整实现
+  - `OpusFile` - OPUS 文件处理器
+  - `read_comment()` - 读取 OpusTags
+  - `write_comment()` - 写入 OpusTags
+  - `is_opus_file()` - OPUS 文件检测
+- 新增 `src/mp4/mod.rs` - MP4/M4A 格式读取实现
+  - `Mp4File` - MP4 文件处理器
+  - `Mp4Metadata` - MP4 元数据结构
+  - `read_metadata()` - 读取 iTunes 风格元数据
+  - `is_mp4_file()` - MP4 文件检测
+- 新增 `src/ape/mod.rs` - APE 格式读取实现
+  - `ApeFile` - APE 文件处理器
+  - `ApeMetadata` - APE 元数据结构
+  - `read_metadata()` - 读取 APE Tag
+  - `is_ape_file()` - APE 文件检测
 
 ### 待完成
-- [ ] 完成 OPUS 格式的完整实现
-- [ ] 完成 MP4/M4A 格式的完整实现
-- [ ] 完成 APE 格式的完整实现
+- [ ] 完成 MP4/M4A 格式的写入支持（需要重建 atom 树）
+- [ ] 完成 APE 格式的写入支持（需要重建标签）
 - [ ] 添加各格式的测试用例
 - [x] 更新文档说明新格式支持
 

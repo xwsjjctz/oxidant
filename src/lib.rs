@@ -7,11 +7,17 @@ use serde::{Serialize, Deserialize, Serializer};
 mod id3;
 mod flac;
 mod ogg;
+mod opus;
+mod mp4;
+mod ape;
 mod utils;
 
 use id3::{Id3v1Tag, Id3v2Tag};
 use flac::{FlacMetadataBlock, FlacMetadataBlockType, FLAC_SIGNATURE, VorbisFields, FlacPicture};
 use ogg::{OGG_SIGNATURE, vorbis::OggVorbisFile};
+use opus::OpusFile;
+use mp4::Mp4File;
+use ape::ApeFile;
 
 /// Custom serialization for Vec<u8> to base64 string
 fn serialize_as_base64<S>(data: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
@@ -60,6 +66,9 @@ impl AudioFile {
             "id3v1" => self.read_id3v1_metadata(),
             "flac" => self.read_flac_metadata(),
             "ogg" => self.read_ogg_metadata(),
+            "opus" => self.read_opus_metadata(),
+            "mp4" => self.read_mp4_metadata(),
+            "ape" => self.read_ape_metadata(),
             _ => Ok(Metadata::default()),
         }
     }
@@ -86,13 +95,31 @@ impl AudioFile {
             }
         }
 
-        // Check for OGG
+        // Check for OGG/OPUS (both use OGG container)
         reader.seek(std::io::SeekFrom::Start(0))?;
         let mut ogg_signature = [0u8; 4];
         if reader.read_exact(&mut ogg_signature).is_ok() {
             if &ogg_signature == OGG_SIGNATURE {
+                // Check if it's OPUS (has OpusHead in first page)
+                if opus::is_opus_file(path) {
+                    return Ok("opus".to_string());
+                }
                 return Ok("ogg".to_string());
             }
+        }
+
+        // Check for MP4/M4A
+        reader.seek(std::io::SeekFrom::Start(0))?;
+        let mut mp4_signature = [0u8; 4];
+        if reader.read_exact(&mut mp4_signature).is_ok() {
+            if &mp4_signature == mp4::MP4_SIGNATURE {
+                return Ok("mp4".to_string());
+            }
+        }
+
+        // Check for APE (tags at end of file)
+        if ape::is_ape_file(path) {
+            return Ok("ape".to_string());
         }
 
         // Check for ID3v1 (at end of file)
@@ -220,6 +247,78 @@ impl AudioFile {
                 metadata.genre = vorbis.get(VorbisFields::GENRE).cloned();
                 metadata.comment = vorbis.get(VorbisFields::COMMENT).cloned();
                 metadata.lyrics = vorbis.get(VorbisFields::LYRICS).cloned();
+                Ok(metadata)
+            }
+            Ok(None) => Ok(Metadata::default()),
+            Err(e) => Err(pyo3::exceptions::PyIOError::new_err(e.to_string())),
+        }
+    }
+
+    /// Read OPUS metadata
+    fn read_opus_metadata(&self) -> PyResult<Metadata> {
+        let opus_file = OpusFile::new(self.path.clone());
+
+        match opus_file.read_comment() {
+            Ok(Some(vorbis)) => {
+                let mut metadata = Metadata::default();
+                metadata.file_type = "OPUS".to_string();
+                metadata.version = "Opus".to_string();
+                metadata.title = vorbis.get(VorbisFields::TITLE).cloned();
+                metadata.artist = vorbis.get(VorbisFields::ARTIST).cloned();
+                metadata.album = vorbis.get(VorbisFields::ALBUM).cloned();
+                metadata.year = vorbis.get(VorbisFields::DATE).cloned();
+                metadata.track = vorbis.get(VorbisFields::TRACKNUMBER).cloned();
+                metadata.genre = vorbis.get(VorbisFields::GENRE).cloned();
+                metadata.comment = vorbis.get(VorbisFields::COMMENT).cloned();
+                metadata.lyrics = vorbis.get(VorbisFields::LYRICS).cloned();
+                Ok(metadata)
+            }
+            Ok(None) => Ok(Metadata::default()),
+            Err(e) => Err(pyo3::exceptions::PyIOError::new_err(e.to_string())),
+        }
+    }
+
+    /// Read MP4 metadata
+    fn read_mp4_metadata(&self) -> PyResult<Metadata> {
+        let mp4_file = Mp4File::new(self.path.clone());
+
+        match mp4_file.read_metadata() {
+            Ok(Some(mp4_meta)) => {
+                let mut metadata = Metadata::default();
+                metadata.file_type = "MP4".to_string();
+                metadata.version = "iTunes".to_string();
+                metadata.title = mp4_meta.title;
+                metadata.artist = mp4_meta.artist;
+                metadata.album = mp4_meta.album;
+                metadata.year = mp4_meta.year;
+                metadata.track = mp4_meta.track;
+                metadata.genre = mp4_meta.genre;
+                metadata.comment = mp4_meta.comment;
+                metadata.lyrics = mp4_meta.lyrics;
+                Ok(metadata)
+            }
+            Ok(None) => Ok(Metadata::default()),
+            Err(e) => Err(pyo3::exceptions::PyIOError::new_err(e.to_string())),
+        }
+    }
+
+    /// Read APE metadata
+    fn read_ape_metadata(&self) -> PyResult<Metadata> {
+        let ape_file = ApeFile::new(self.path.clone());
+
+        match ape_file.read_metadata() {
+            Ok(Some(ape_meta)) => {
+                let mut metadata = Metadata::default();
+                metadata.file_type = "APE".to_string();
+                metadata.version = "APE Tag".to_string();
+                metadata.title = ape_meta.title;
+                metadata.artist = ape_meta.artist;
+                metadata.album = ape_meta.album;
+                metadata.year = ape_meta.year;
+                metadata.track = ape_meta.track;
+                metadata.genre = ape_meta.genre;
+                metadata.comment = ape_meta.comment;
+                metadata.lyrics = ape_meta.lyrics;
                 Ok(metadata)
             }
             Ok(None) => Ok(Metadata::default()),
@@ -831,6 +930,70 @@ impl AudioFile {
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
         Ok(())
+    }
+
+    /// Write OPUS metadata
+    fn write_opus_metadata(&self, metadata: Metadata) -> PyResult<()> {
+        let opus_file = OpusFile::new(self.path.clone());
+
+        // Read existing comment
+        let mut vorbis = match opus_file.read_comment() {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                // Create new comment
+                flac::VorbisComment::default()
+            }
+            Err(e) => return Err(pyo3::exceptions::PyIOError::new_err(e.to_string())),
+        };
+
+        // Update all fields
+        if let Some(title) = &metadata.title {
+            vorbis.set(flac::VorbisFields::TITLE, title);
+        }
+        if let Some(artist) = &metadata.artist {
+            vorbis.set(flac::VorbisFields::ARTIST, artist);
+        }
+        if let Some(album) = &metadata.album {
+            vorbis.set(flac::VorbisFields::ALBUM, album);
+        }
+        if let Some(year) = &metadata.year {
+            vorbis.set(flac::VorbisFields::DATE, year);
+        }
+        if let Some(track) = &metadata.track {
+            vorbis.set(flac::VorbisFields::TRACKNUMBER, track);
+        }
+        if let Some(genre) = &metadata.genre {
+            vorbis.set(flac::VorbisFields::GENRE, genre);
+        }
+        if let Some(comment) = &metadata.comment {
+            vorbis.set(flac::VorbisFields::COMMENT, comment);
+        }
+        if let Some(lyrics) = &metadata.lyrics {
+            vorbis.set(flac::VorbisFields::LYRICS, lyrics);
+        } else {
+            // Remove lyrics if None
+            vorbis.remove(flac::VorbisFields::LYRICS);
+        }
+
+        // Write back to file
+        opus_file.write_comment(&vorbis)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Write MP4 metadata (placeholder - not yet fully implemented)
+    fn write_mp4_metadata(&self, _metadata: Metadata) -> PyResult<()> {
+        Err(pyo3::exceptions::PyValueError::new_err(
+            "MP4 metadata writing is not yet supported"
+        ))
+    }
+
+    /// Write APE metadata (placeholder - not yet fully implemented)
+    fn write_ape_metadata(&self, _metadata: Metadata) -> PyResult<()> {
+        Err(pyo3::exceptions::PyValueError::new_err(
+            "APE metadata writing is not yet supported"
+        ))
     }
 
     // ============== Old Interface Support Methods ==============
@@ -1571,6 +1734,9 @@ impl AudioFile {
             "id3v1" => self.write_id3v1_metadata(metadata),
             "flac" => self.write_flac_metadata(metadata),
             "ogg" => self.write_ogg_metadata(metadata),
+            "opus" => self.write_opus_metadata(metadata),
+            "mp4" => self.write_mp4_metadata(metadata),
+            "ape" => self.write_ape_metadata(metadata),
             _ => Err(pyo3::exceptions::PyValueError::new_err(
                 format!("Unsupported file type: {}", self.file_type)
             )),
